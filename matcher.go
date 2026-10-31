@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/2comjie/ntool/logx/logdef"
@@ -21,12 +22,12 @@ type Matcher[T PlayerId] struct {
 	logdef.ILogger
 	options *options[T]
 
-	frameIndex int
+	frameIndex atomic.Int64
 
 	mu sync.Mutex
 
 	tickets    map[string]*Ticket[T] // Ticket.Id -> 完整票
-	matchIndex MatchIndex
+	matchIndex MatchIndex[T]
 }
 
 func (m *Matcher[T]) Start(ctx context.Context) {
@@ -44,9 +45,9 @@ func (m *Matcher[T]) Start(ctx context.Context) {
 }
 
 func (m *Matcher[T]) RunOnce() {
-	logCtx := m.WithField("action", "RunOnce").WithField("frameIndex", m.frameIndex)
+	logCtx := m.WithField("action", "RunOnce").WithField("frameIndex", m.frameIndex.Load())
 	defer func() {
-		m.frameIndex++
+		m.frameIndex.Add(1)
 	}()
 
 	logCtx.Info("开始一轮匹配")
@@ -72,7 +73,7 @@ func (m *Matcher[T]) unlock() {
 }
 
 func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) {
-	logCtx := m.WithField("action", "MakeMatch").WithField("frameIndex", m.frameIndex)
+	logCtx := m.WithField("action", "MakeMatch").WithField("frameIndex", m.frameIndex.Load())
 	logCtx.Infof("开始MakeMatch")
 	panic("not implemented")
 }
@@ -101,7 +102,7 @@ type AddPlayer[T PlayerId] struct {
 }
 
 func (m *Matcher[T]) Add(param AddParam[T]) error {
-	logCtx := m.WithField("action", "Add").WithField("frameIndex", m.frameIndex)
+	logCtx := m.WithField("action", "Add")
 	if len(param.Players) == 0 || param.Index == "" {
 		return errors.New("invalid param")
 	}
@@ -132,7 +133,15 @@ func (m *Matcher[T]) Add(param AddParam[T]) error {
 
 		ticket.Strategies[rounds] = strategy
 	}
+	ticket.Players = make(map[T]*Player[T], len(param.Players))
 
+	for uid, player := range param.Players {
+		ticket.Players[uid] = &Player[T]{
+			Uid:       uid,
+			ExtraInfo: maps.Clone(player.ExtraInfo),
+			TicketId:  ticket.Id,
+		}
+	}
 	m.lock()
 	defer m.unlock()
 

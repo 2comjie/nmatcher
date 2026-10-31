@@ -9,7 +9,7 @@ import (
 )
 
 func TestMatchIndex(t *testing.T) {
-	index := NewMatchIndex()
+	index := NewMatchIndex[string]()
 
 	tickets := map[string]*Ticket[string]{
 		"a": {
@@ -211,12 +211,68 @@ func TestMatchIndex(t *testing.T) {
 	}
 }
 
+func TestMatchIndexPlayerConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		index *MatchIndex[int]
+	}{
+		{"zero value", &MatchIndex[int]{}},
+		{"constructor", NewMatchIndex[int]()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index := tc.index
+			a := &Ticket[int]{
+				Id: "a", Index: "leader-a",
+				Players: map[int]*Player[int]{1: {Uid: 1, TicketId: "a"}},
+			}
+			b := &Ticket[int]{
+				Id: "b", Index: "leader-b",
+				Players: map[int]*Player[int]{
+					1: {Uid: 1, TicketId: "b"},
+					2: {Uid: 2, TicketId: "b"},
+				},
+				StringData: map[string]string{"region": "asia"},
+				NumberData: map[string]float64{"score": 1500},
+			}
+			if err := index.Add(a); err != nil {
+				t.Fatal(err)
+			}
+			if err := index.Add(b); !errors.Is(err, ErrPlayerDuplicated) {
+				t.Fatalf("玩家重复：得到 %v，期望 ErrPlayerDuplicated", err)
+			}
+			if index.playerToTicketId[1] != "a" {
+				t.Fatal("失败的 Add 覆盖了玩家所属票")
+			}
+			if _, exists := index.playerToTicketId[2]; exists {
+				t.Fatal("失败的 Add 占用了未冲突的玩家")
+			}
+			if _, exists := index.indexToId[b.Index]; exists || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
+				t.Fatal("失败的 Add 留下了索引")
+			}
+
+			index.Remove(a)
+			if err := index.Add(b); err != nil {
+				t.Fatalf("移除原票后玩家应可重新入队：%v", err)
+			}
+			for uid := range b.Players {
+				if index.playerToTicketId[uid] != b.Id {
+					t.Fatalf("玩家 %d 未关联新票", uid)
+				}
+			}
+			index.Remove(b)
+			if len(index.playerToTicketId) != 0 || len(index.indexToId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
+				t.Fatal("移除后仍有索引残留")
+			}
+		})
+	}
+}
+
 func BenchmarkMatchIndex(b *testing.B) {
 	const batch = 256
 
 	for _, size := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprintf("N=%d", size), func(b *testing.B) {
-			index := NewMatchIndex()
+			index := NewMatchIndex[string]()
 			tickets := make([]*Ticket[string], size+batch)
 			regions := []string{"asia", "europe", "america", "africa"}
 
@@ -225,6 +281,9 @@ func BenchmarkMatchIndex(b *testing.B) {
 				tickets[i] = &Ticket[string]{
 					Id:    id,
 					Index: id,
+					Players: map[string]*Player[string]{
+						id: {Uid: id, TicketId: id},
+					},
 					StringData: map[string]string{
 						"region": regions[i%len(regions)],
 					},
