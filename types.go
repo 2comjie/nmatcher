@@ -32,22 +32,6 @@ type Ticket[T PlayerId] struct {
 	Attempts   int       `json:"attempts"` // 该票主动发起匹配的次数
 }
 
-type NumberRange struct {
-	Min float64 `json:"min"`
-	Max float64 `json:"max"`
-}
-
-// MatchConditions 内所有条件必须同时满足。
-// 配置了条件的属性必须存在；数值范围包含 Min 和 Max。
-type MatchConditions struct {
-	StringEquals map[string]string      `json:"string_equals"`
-	NumberRanges map[string]NumberRange `json:"number_ranges"`
-}
-
-type MatchStrategy struct {
-	AnyOf []MatchConditions `json:"any_of"` // 组间为 OR，组内为 AND
-}
-
 // 对局的匹配器
 // 比如a阵营4人 b阵营5人 c阵营6人
 // 最后的 MatchResult 就是 map[Team]Player
@@ -58,4 +42,14 @@ type MatchResult[T PlayerId] struct {
 	Id        string                `json:"id"`
 	TeamMap   map[Team][]*Player[T] `json:"team_map"`
 	TicketMap map[string]*Ticket[T] `json:"ticket_map"`
+}
+
+func (t *Ticket[T]) StrategyAt(rounds int) MatchStrategy {
+	selectedRound := 0
+	for after := range t.Strategies {
+		if after <= rounds && after > selectedRound {
+			selectedRound = after
+		}
+	}
+	return t.Strategies[selectedRound]
 }

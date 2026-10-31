@@ -1,10 +1,14 @@
 package nmatcher
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type options struct {
 	TeamInfo         map[Team]int // 阵营信息
 	AllowSplitTicket bool         // 是否允许同一张票的玩家分配到不同阵营，默认不允许
+	MatchInterval    time.Duration
 }
 
 type Option func(*options)
