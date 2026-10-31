@@ -1,6 +1,10 @@
 package nmatcher
 
-import "time"
+import (
+	"maps"
+	"slices"
+	"time"
+)
 
 type Team string
 
@@ -52,4 +56,54 @@ func (t *Ticket[T]) StrategyAt(rounds int) MatchStrategy {
 		}
 	}
 	return t.Strategies[selectedRound]
+}
+
+func (t *Ticket[T]) Clone() Ticket[T] {
+	cloned := *t
+
+	cloned.StringData = maps.Clone(t.StringData)
+	cloned.NumberData = maps.Clone(t.NumberData)
+
+	cloned.Players = maps.Clone(t.Players)
+	for uid, player := range t.Players {
+		playerCopy := *player
+		playerCopy.ExtraInfo = maps.Clone(player.ExtraInfo)
+		cloned.Players[uid] = &playerCopy
+	}
+
+	cloned.Strategies = maps.Clone(t.Strategies)
+	for rounds, strategy := range t.Strategies {
+		strategy.AnyOf = slices.Clone(strategy.AnyOf)
+		for i := range strategy.AnyOf {
+			group := &strategy.AnyOf[i]
+			group.StringEquals = maps.Clone(group.StringEquals)
+			group.NumberRanges = maps.Clone(group.NumberRanges)
+		}
+		cloned.Strategies[rounds] = strategy
+	}
+
+	return cloned
+}
+
+func (r *MatchResult[T]) Clone() MatchResult[T] {
+	cloned := *r
+
+	cloned.TicketMap = maps.Clone(r.TicketMap)
+	for id, ticket := range r.TicketMap {
+		ticketCopy := ticket.Clone()
+		cloned.TicketMap[id] = &ticketCopy
+	}
+
+	cloned.TeamMap = maps.Clone(r.TeamMap)
+	for team, players := range r.TeamMap {
+		playerCopies := slices.Clone(players)
+		for i, player := range players {
+			playerCopy := *player
+			playerCopy.ExtraInfo = maps.Clone(player.ExtraInfo)
+			playerCopies[i] = &playerCopy
+		}
+		cloned.TeamMap[team] = playerCopies
+	}
+
+	return cloned
 }
