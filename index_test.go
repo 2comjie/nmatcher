@@ -72,6 +72,11 @@ func TestMatchIndex(t *testing.T) {
 			want: []string{"a", "b"},
 		},
 		{
+			name:   "字符串不等于",
+			groups: []MatchConditions{{StringNotEquals: map[string]string{"region": "asia"}}},
+			want:   []string{"c"},
+		},
+		{
 			name: "同分票都保留",
 			groups: []MatchConditions{
 				{NumberRanges: map[string]NumberRange{
@@ -131,7 +136,7 @@ func TestMatchIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			strategy := MatchStrategy{AnyOf: tt.groups}
+			strategy := MatchStrategy{Required: tt.groups}
 			seen := make(map[string]bool)
 			var got []string
 
@@ -155,7 +160,7 @@ func TestMatchIndex(t *testing.T) {
 	}
 
 	rangeQuery := MatchStrategy{
-		AnyOf: []MatchConditions{{
+		Required: []MatchConditions{{
 			NumberRanges: map[string]NumberRange{
 				"score": {Min: 1500, Max: 1500},
 			},
@@ -198,7 +203,7 @@ func TestMatchIndex(t *testing.T) {
 
 	// 前两个分支都扫描 a，预算为 2 时不能继续扫描 c。
 	repeated := MatchStrategy{
-		AnyOf: []MatchConditions{
+		Required: []MatchConditions{
 			{StringEquals: map[string]string{"region": "asia"}},
 			{NumberRanges: map[string]NumberRange{
 				"score": {Min: 1500, Max: 1500},
@@ -208,6 +213,109 @@ func TestMatchIndex(t *testing.T) {
 	}
 	if got := index.Search(repeated, 2); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("重复扫描未正确计入预算：%v", got)
+	}
+}
+
+func TestMatchIndexOwnsTickets(t *testing.T) {
+	var index MatchIndex[int]
+	original := &Ticket[int]{
+		Id: "a", Index: "team",
+		Players:    map[int]*Player[int]{1: {Uid: 1, TicketId: "a", ExtraInfo: map[string]string{"name": "alice"}}},
+		StringData: map[string]string{"region": "asia"},
+		NumberData: map[string]float64{"score": 1500},
+	}
+	if err := index.Add(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Add(&Ticket[int]{Id: "a", Index: "other"}); !errors.Is(err, ErrTicketDuplicated) {
+		t.Fatalf("重复票 Id：得到 %v", err)
+	}
+	original.Index = "changed"
+	original.StringData["region"] = "europe"
+	original.NumberData["score"] = 999
+	original.Players[1].ExtraInfo["name"] = "changed"
+
+	snapshot, exists := index.GetByIndex("team")
+	if !exists || snapshot.Index != "team" || snapshot.StringData["region"] != "asia" || snapshot.NumberData["score"] != 1500 || snapshot.Players[1].ExtraInfo["name"] != "alice" {
+		t.Fatal("修改入队参数影响了内部票")
+	}
+	snapshot.Index = "changed-again"
+	snapshot.StringData["region"] = "africa"
+	snapshot.NumberData["score"] = 123
+	delete(snapshot.Players, 1)
+	stored, exists := index.Get("a")
+	if !exists || stored.Index != "team" || stored.StringData["region"] != "asia" || stored.NumberData["score"] != 1500 || len(stored.Players) != 1 {
+		t.Fatal("修改查询副本影响了内部票")
+	}
+
+	// 即使传入副本的属性已改变，删除也使用内部原票清理索引。
+	index.Remove(snapshot)
+	if _, exists := index.Get("a"); exists {
+		t.Fatal("删除后仍可查询到票")
+	}
+	if len(index.tickets) != 0 || len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
+		t.Fatal("删除后票或索引仍有残留")
+	}
+}
+
+func TestMatchIndexIgnoresBonuses(t *testing.T) {
+	index := NewMatchIndex[string]()
+	for _, id := range []string{"a", "b"} {
+		if err := index.Add(&Ticket[string]{Id: id, Index: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	strategy := MatchStrategy{Bonuses: []MatchBonus{{
+		AnyOf: []MatchConditions{{StringEquals: map[string]string{"region": "asia"}}},
+		Score: 10,
+	}}}
+	got := index.Search(strategy, 100)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("bonus conditions filtered candidates: %v", got)
+	}
+}
+
+func TestMatchIndexRemoveOldTicket(t *testing.T) {
+	var index MatchIndex[int]
+	old := &Ticket[int]{
+		Id: "old", Index: "team",
+		Players:    map[int]*Player[int]{1: {Uid: 1, TicketId: "old"}},
+		StringData: map[string]string{"region": "asia"},
+		NumberData: map[string]float64{"score": 100},
+	}
+	current := &Ticket[int]{
+		Id: "current", Index: "team",
+		Players:    map[int]*Player[int]{1: {Uid: 1, TicketId: "current"}},
+		StringData: map[string]string{"region": "europe"},
+		NumberData: map[string]float64{"score": 200},
+	}
+	if err := index.Add(old); err != nil {
+		t.Fatal(err)
+	}
+	index.Remove(old)
+	if err := index.Add(current); err != nil {
+		t.Fatal(err)
+	}
+
+	// 旧匹配快照不能移除同一业务标识下的新票。
+	index.Remove(old)
+	if index.indexToId[current.Index] != current.Id || index.playerToTicketId[1] != current.Id {
+		t.Fatal("移除旧票破坏了新票的业务或玩家索引")
+	}
+	for _, group := range []MatchConditions{
+		{StringEquals: map[string]string{"region": "europe"}},
+		{NumberRanges: map[string]NumberRange{"score": {Min: 200, Max: 200}}},
+	} {
+		got := index.Search(MatchStrategy{Required: []MatchConditions{group}}, 100)
+		if !slices.Equal(got, []string{current.Id}) {
+			t.Fatalf("新票属性索引异常：%v", got)
+		}
+	}
+	index.Remove(current)
+	index.Remove(current)
+	if len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
+		t.Fatal("移除新票后仍有索引残留")
 	}
 }
 
@@ -360,7 +468,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 				{
 					name: "String",
 					strategy: MatchStrategy{
-						AnyOf: []MatchConditions{{
+						Required: []MatchConditions{{
 							StringEquals: map[string]string{"region": "asia"},
 						}},
 					},
@@ -368,7 +476,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 				{
 					name: "Number",
 					strategy: MatchStrategy{
-						AnyOf: []MatchConditions{{
+						Required: []MatchConditions{{
 							NumberRanges: map[string]NumberRange{
 								"score": {Min: 400, Max: 600},
 							},

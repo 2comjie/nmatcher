@@ -4,18 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"maps"
-	"slices"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/2comjie/ntool/logx/logdef"
-)
-
-var (
-	ErrTicketDuplicated = errors.New("duplicated ticket")
-	ErrTicketNotFound   = errors.New("ticket not found")
 )
 
 type Matcher[T PlayerId] struct {
@@ -26,7 +20,6 @@ type Matcher[T PlayerId] struct {
 
 	mu sync.Mutex
 
-	tickets    map[string]*Ticket[T] // Ticket.Id -> 完整票
 	matchIndex MatchIndex[T]
 }
 
@@ -75,7 +68,7 @@ func (m *Matcher[T]) unlock() {
 func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) {
 	logCtx := m.WithField("action", "MakeMatch").WithField("frameIndex", m.frameIndex.Load())
 	logCtx.Infof("开始MakeMatch")
-	panic("not implemented")
+	panic("TODO")
 }
 
 // CanMatch 判断双方当前策略是否互相接受，不检查阵营容量和分队约束
@@ -103,52 +96,40 @@ type AddPlayer[T PlayerId] struct {
 
 func (m *Matcher[T]) Add(param AddParam[T]) error {
 	logCtx := m.WithField("action", "Add")
-	if len(param.Players) == 0 || param.Index == "" {
+	if len(param.Players) == 0 || param.Index == "" || param.Timeout < 0 {
 		return errors.New("invalid param")
 	}
-	if param.Timeout < 0 {
-		return errors.New("timeout must not be negative")
-	}
 	if _, exists := param.Strategies[0]; !exists {
-		return errors.New("strategy for round 0 is required")
+		return errors.New("invalid param")
+	}
+	for _, strategy := range param.Strategies {
+		for _, bonus := range strategy.Bonuses {
+			if bonus.Score < 0 || math.IsNaN(bonus.Score) || math.IsInf(bonus.Score, 0) {
+				return errors.New("bonus score must be finite and non-negative")
+			}
+		}
 	}
 
 	ticket := Ticket[T]{
 		Id:         rand.Text(),
 		Index:      param.Index,
-		StringData: maps.Clone(param.StringData),
-		NumberData: maps.Clone(param.NumberData),
-		Strategies: make(map[int]MatchStrategy, len(param.Strategies)),
+		StringData: param.StringData,
+		NumberData: param.NumberData,
+		Strategies: param.Strategies,
 	}
 
 	logCtx = logCtx.WithField("id", ticket.Id).WithField("index", ticket.Index)
-	for rounds, strategy := range param.Strategies {
-		strategy.AnyOf = slices.Clone(strategy.AnyOf)
-
-		for i := range strategy.AnyOf {
-			group := &strategy.AnyOf[i]
-			group.StringEquals = maps.Clone(group.StringEquals)
-			group.NumberRanges = maps.Clone(group.NumberRanges)
-		}
-
-		ticket.Strategies[rounds] = strategy
-	}
 	ticket.Players = make(map[T]*Player[T], len(param.Players))
 
 	for uid, player := range param.Players {
 		ticket.Players[uid] = &Player[T]{
 			Uid:       uid,
-			ExtraInfo: maps.Clone(player.ExtraInfo),
+			ExtraInfo: player.ExtraInfo,
 			TicketId:  ticket.Id,
 		}
 	}
 	m.lock()
 	defer m.unlock()
-
-	if _, ex := m.tickets[ticket.Id]; ex {
-		logCtx.Error("冲突的票")
-		return ErrTicketDuplicated
-	}
 
 	ticket.CreateTime = time.Now()
 	if param.Timeout > 0 {
@@ -159,11 +140,27 @@ func (m *Matcher[T]) Add(param AddParam[T]) error {
 		logCtx.Warnf("添加票索引失败  %v", err)
 		return err
 	}
-	if m.tickets == nil {
-		m.tickets = make(map[string]*Ticket[T])
-	}
-	m.tickets[ticket.Id] = &ticket
-
 	logCtx.Info("匹配票入队成功")
+	return nil
+}
+
+func (m *Matcher[T]) Cancel(index string) error {
+	logCtx := m.WithField("action", "Cancel").WithField("index", index)
+	if index == "" {
+		return errors.New("invalid param")
+	}
+
+	m.lock()
+	defer m.unlock()
+	ticket, exists := m.matchIndex.GetByIndex(index)
+	if !exists {
+		return ErrTicketNotFound
+	}
+	logCtx = logCtx.WithField("id", ticket.Id)
+
+	// 同时移除业务标识、玩家和属性索引
+	m.matchIndex.Remove(ticket)
+
+	logCtx.Infof("取消匹配成功")
 	return nil
 }

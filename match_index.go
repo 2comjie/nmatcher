@@ -8,6 +8,8 @@ import (
 )
 
 var (
+	ErrTicketDuplicated = errors.New("duplicated ticket")
+	ErrTicketNotFound   = errors.New("ticket not found")
 	ErrIndexDuplicated  = errors.New("duplicated index")
 	ErrPlayerDuplicated = errors.New("player already in matching")
 )
@@ -19,6 +21,8 @@ type numberIndexItem struct {
 
 // MatchIndex 的零值可用，由 Matcher.lock 保护。
 type MatchIndex[T PlayerId] struct {
+	// 完整票与所有辅助索引由同一个组件维护。
+	tickets map[string]*Ticket[T]
 	// 业务标识 Ticket.Index -> Ticket.Id
 	indexToId map[string]string
 	// 玩家 Uid -> Ticket.Id
@@ -33,6 +37,7 @@ type MatchIndex[T PlayerId] struct {
 
 func NewMatchIndex[T PlayerId]() *MatchIndex[T] {
 	return &MatchIndex[T]{
+		tickets:          make(map[string]*Ticket[T]),
 		indexToId:        make(map[string]string),
 		playerToTicketId: make(map[T]string),
 		stringIndex:      make(map[string]map[string]map[string]struct{}),
@@ -40,9 +45,11 @@ func NewMatchIndex[T PlayerId]() *MatchIndex[T] {
 	}
 }
 
-// Add 在 Matcher 检查票 Id 不重复后调用，检查业务标识和玩家冲突。
-// 票的业务标识、玩家和属性在移除索引前必须保持不变。
+// Add 检查票 Id、业务标识和玩家冲突，保存独立副本并建立所有索引。
 func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
+	if _, exists := m.tickets[ticket.Id]; exists {
+		return ErrTicketDuplicated
+	}
 	if _, ex := m.indexToId[ticket.Index]; ex {
 		return ErrIndexDuplicated
 	}
@@ -52,13 +59,17 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 		}
 	}
 
-	if m.indexToId == nil {
+	cloned := ticket.Clone()
+	ticket = &cloned
+	if m.tickets == nil {
+		m.tickets = make(map[string]*Ticket[T])
 		m.indexToId = make(map[string]string)
 		m.playerToTicketId = make(map[T]string)
 		m.stringIndex = make(map[string]map[string]map[string]struct{})
 		m.numberIndex = make(map[string]*btree.BTreeG[numberIndexItem])
 	}
 
+	m.tickets[ticket.Id] = ticket
 	m.indexToId[ticket.Index] = ticket.Id
 	for uid := range ticket.Players {
 		m.playerToTicketId[uid] = ticket.Id
@@ -104,8 +115,33 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 	return nil
 }
 
-// Remove 移除仍在索引中的票，使用入队时的原始属性。
+// Get 返回票的独立副本。
+func (m *MatchIndex[T]) Get(ticketId string) (*Ticket[T], bool) {
+	ticket, exists := m.tickets[ticketId]
+	if !exists {
+		return nil, false
+	}
+	cloned := ticket.Clone()
+	return &cloned, true
+}
+
+// GetByIndex 根据业务标识返回票的独立副本。
+func (m *MatchIndex[T]) GetByIndex(index string) (*Ticket[T], bool) {
+	ticketId, exists := m.indexToId[index]
+	if !exists {
+		return nil, false
+	}
+	return m.Get(ticketId)
+}
+
+// Remove 按票 Id 找到内部原票，同时删除完整票和所有索引。
+// 旧票已移除或被新票替代时不做修改。
 func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
+	stored, exists := m.tickets[ticket.Id]
+	if !exists {
+		return
+	}
+	ticket = stored
 	delete(m.indexToId, ticket.Index)
 	for uid := range ticket.Players {
 		delete(m.playerToTicketId, uid)
@@ -128,9 +164,11 @@ func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
 			delete(m.numberIndex, key)
 		}
 	}
+	delete(m.tickets, ticket.Id)
 }
 
-// Search 返回去重后的候选票 Id，调用方仍需检查完整策略和双向接受。
+// Search 只按必要条件返回候选票 Id，加分条件不参与筛选。
+// 调用方仍需检查完整必要条件和双向接受，再计算得分。
 // maxScanned 限制实际遍历的条目数，重复条目也计入预算；不保证返回顺序。
 func (m *MatchIndex[T]) Search(strategy MatchStrategy, maxScanned int) []string {
 	if maxScanned <= 0 {
@@ -148,7 +186,7 @@ func (m *MatchIndex[T]) Search(strategy MatchStrategy, maxScanned int) []string 
 		return scanned < maxScanned
 	}
 
-	groups := strategy.AnyOf
+	groups := strategy.Required
 	if len(groups) == 0 {
 		groups = []MatchConditions{{}}
 	}
@@ -203,8 +241,8 @@ func (m *MatchIndex[T]) Search(strategy MatchStrategy, maxScanned int) []string 
 				return result
 			}
 		} else {
-			// 空条件组接受所有票，之后的 OR 分支无需重复遍历。
-			for _, id := range m.indexToId {
+			// 没有正向索引条件时扫描全体票，不等条件由 Accept 检查。
+			for id := range m.tickets {
 				if !visit(id) {
 					return result
 				}

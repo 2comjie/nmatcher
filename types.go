@@ -73,13 +73,7 @@ func (t *Ticket[T]) Clone() Ticket[T] {
 
 	cloned.Strategies = maps.Clone(t.Strategies)
 	for rounds, strategy := range t.Strategies {
-		strategy.AnyOf = slices.Clone(strategy.AnyOf)
-		for i := range strategy.AnyOf {
-			group := &strategy.AnyOf[i]
-			group.StringEquals = maps.Clone(group.StringEquals)
-			group.NumberRanges = maps.Clone(group.NumberRanges)
-		}
-		cloned.Strategies[rounds] = strategy
+		cloned.Strategies[rounds] = strategy.Clone()
 	}
 
 	return cloned
