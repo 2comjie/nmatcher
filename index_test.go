@@ -253,7 +253,7 @@ func TestMatchIndexOwnsTickets(t *testing.T) {
 	if _, exists := index.Get("a"); exists {
 		t.Fatal("删除后仍可查询到票")
 	}
-	if len(index.tickets) != 0 || len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
+	if index.tickets.Len() != 0 || len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
 		t.Fatal("删除后票或索引仍有残留")
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"math"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,8 +16,6 @@ type Matcher[T PlayerId] struct {
 	options *options[T]
 
 	frameIndex atomic.Int64
-
-	mu sync.Mutex
 
 	matchIndex MatchIndex[T]
 }
@@ -56,13 +53,6 @@ func (m *Matcher[T]) RunOnce() {
 	}
 
 	logCtx.Info("一轮匹配完成")
-}
-
-func (m *Matcher[T]) lock() {
-	m.mu.Lock()
-}
-func (m *Matcher[T]) unlock() {
-	m.mu.Unlock()
 }
 
 func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) {
@@ -128,9 +118,6 @@ func (m *Matcher[T]) Add(param AddParam[T]) error {
 			TicketId:  ticket.Id,
 		}
 	}
-	m.lock()
-	defer m.unlock()
-
 	ticket.CreateTime = time.Now()
 	if param.Timeout > 0 {
 		ticket.ExpireTime = ticket.CreateTime.Add(param.Timeout)
@@ -150,17 +137,22 @@ func (m *Matcher[T]) Cancel(index string) error {
 		return errors.New("invalid param")
 	}
 
-	m.lock()
-	defer m.unlock()
-	ticket, exists := m.matchIndex.GetByIndex(index)
-	if !exists {
-		return ErrTicketNotFound
+	if err := m.matchIndex.Cancel(index); err != nil {
+		return err
 	}
-	logCtx = logCtx.WithField("id", ticket.Id)
-
-	// 同时移除业务标识、玩家和属性索引
-	m.matchIndex.Remove(ticket)
 
 	logCtx.Infof("取消匹配成功")
 	return nil
+}
+
+// CancelTicket 精确取消某次入队，旧请求不会取消相同业务 Index 下的新票。
+func (m *Matcher[T]) CancelTicket(ticketId string) error {
+	if ticketId == "" {
+		return errors.New("invalid param")
+	}
+	return m.matchIndex.CancelTicket(ticketId)
+}
+
+func (m *Matcher[T]) CommitMatch(result *MatchResult[T]) bool {
+	return m.matchIndex.CommitMatch(result)
 }
