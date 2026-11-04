@@ -17,7 +17,8 @@ func TestConcurrentAddSameBusinessIndex(t *testing.T) {
 	for uid := 0; uid < 32; uid++ {
 		go func(uid int) {
 			<-start
-			results <- m.Add(AddParam[int]{Index: "same", Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}})
+			_, err := m.Add(AddParam[int]{Index: "same", Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}})
+			results <- err
 		}(uid)
 	}
 	close(start)
@@ -112,13 +113,13 @@ func TestMatchedCallbackCanAddAndCancel(t *testing.T) {
 	callback := make(chan error, 1)
 	m = NewMatcher[int](logx.WithName("callback-test"), WithTeamInfo[int](map[Team]int{"a": 2}),
 		WithOnMatched[int](func(MatchResult[int]) {
-			if err := m.Add(AddParam[int]{Index: "again", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+			if _, err := m.Add(AddParam[int]{Index: "again", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 				callback <- err
 				return
 			}
 			callback <- m.Cancel("again")
 		}), WithOnTimeout[int](func(Ticket[int]) {}))
-	if err := m.Add(AddParam[int]{Index: "party", Players: map[int]AddPlayer[int]{1: {Uid: 1}, 2: {Uid: 2}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+	if _, err := m.Add(AddParam[int]{Index: "party", Players: map[int]AddPlayer[int]{1: {Uid: 1}, 2: {Uid: 2}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -141,7 +142,7 @@ func TestConcurrentMakeMatchNoDuplicatePlayers(t *testing.T) {
 	m := NewMatcher[int](logx.WithName("parallel-make-match"), WithTeamInfo[int](map[Team]int{"a": 2}),
 		WithOnMatched[int](func(MatchResult[int]) {}), WithOnTimeout[int](func(Ticket[int]) {}))
 	for uid := 0; uid < 20; uid++ {
-		if err := m.Add(AddParam[int]{Index: strconv.Itoa(uid), Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+		if _, err := m.Add(AddParam[int]{Index: strconv.Itoa(uid), Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

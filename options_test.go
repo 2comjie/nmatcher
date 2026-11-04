@@ -26,7 +26,7 @@ func TestOptionsTeamIsolationAndCallbacks(t *testing.T) {
 	if m.options.MatchInterval != 100*time.Millisecond {
 		t.Fatal("default tick should be 100ms")
 	}
-	if err := m.Add(AddParam[int]{Index: "party", Players: map[int]AddPlayer[int]{1: {Uid: 1}, 2: {Uid: 2}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+	if _, err := m.Add(AddParam[int]{Index: "party", Players: map[int]AddPlayer[int]{1: {Uid: 1}, 2: {Uid: 2}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 		t.Fatal(err)
 	}
 	m.RunOnce()

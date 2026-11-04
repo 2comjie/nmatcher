@@ -387,18 +387,19 @@ type AddPlayer[T PlayerId] struct {
 	ExtraInfo map[string]string
 }
 
-func (m *Matcher[T]) Add(param AddParam[T]) error {
+// Add 入队成功后返回本次入队的 TicketId；失败时返回空字符串。
+func (m *Matcher[T]) Add(param AddParam[T]) (string, error) {
 	logCtx := m.WithField("action", "Add")
 	if len(param.Players) == 0 || param.Index == "" || param.Timeout < 0 {
-		return errors.New("invalid param")
+		return "", errors.New("invalid param")
 	}
 	if _, exists := param.Strategies[0]; !exists {
-		return errors.New("invalid param")
+		return "", errors.New("invalid param")
 	}
 	for _, strategy := range param.Strategies {
 		for _, bonus := range strategy.Bonuses {
 			if bonus.Score < 0 || math.IsNaN(bonus.Score) || math.IsInf(bonus.Score, 0) {
-				return errors.New("bonus score must be finite and non-negative")
+				return "", errors.New("bonus score must be finite and non-negative")
 			}
 		}
 	}
@@ -428,10 +429,21 @@ func (m *Matcher[T]) Add(param AddParam[T]) error {
 
 	if err := m.matchIndex.Add(&ticket); err != nil {
 		logCtx.Warnf("添加票索引失败  %v", err)
-		return err
+		return "", err
 	}
 	logCtx.Info("匹配票入队成功")
-	return nil
+	return ticket.Id, nil
+}
+
+// Get 按 TicketId 查询仍在队列中的票，返回独立深拷贝；不存在时返回 nil、false。
+// 返回值是读取时的快照，之后该票仍可能被并发取消或匹配。
+func (m *Matcher[T]) Get(ticketId string) (*Ticket[T], bool) {
+	return m.matchIndex.Get(ticketId)
+}
+
+// GetByIndex 按业务 Index 查询当前排队票，返回值语义与 Get 一致。
+func (m *Matcher[T]) GetByIndex(index string) (*Ticket[T], bool) {
+	return m.matchIndex.GetByIndex(index)
 }
 
 func (m *Matcher[T]) Cancel(index string) error {

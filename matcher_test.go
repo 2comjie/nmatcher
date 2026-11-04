@@ -35,7 +35,7 @@ func TestMatchFullRound(t *testing.T) {
 					uid++
 					players[uid] = AddPlayer[int]{Uid: uid}
 				}
-				if err := m.Add(AddParam[int]{Index: strconv.Itoa(i), Players: players, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+				if _, err := m.Add(AddParam[int]{Index: strconv.Itoa(i), Players: players, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -67,7 +67,7 @@ func TestMatchFullRound(t *testing.T) {
 			if len(results) != 1 {
 				t.Fatal("duplicate success callback")
 			}
-			if err := m.Add(AddParam[int]{Index: "0", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+			if _, err := m.Add(AddParam[int]{Index: "0", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 				t.Fatalf("players should be reusable after match: %v", err)
 			}
 		})
@@ -210,7 +210,7 @@ func TestMatchTimeoutCallback(t *testing.T) {
 	if err := m.matchIndex.Add(&Ticket[int]{Id: "old", Index: "expired", CreateTime: time.Now().Add(-time.Minute), ExpireTime: time.Now().Add(-time.Second), Players: map[int]*Player[int]{7: {Uid: 7}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Add(AddParam[int]{Index: "waiting", Players: map[int]AddPlayer[int]{8: {Uid: 8}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+	if _, err := m.Add(AddParam[int]{Index: "waiting", Players: map[int]AddPlayer[int]{8: {Uid: 8}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 		t.Fatal(err)
 	}
 	m.RunOnce()
@@ -218,7 +218,7 @@ func TestMatchTimeoutCallback(t *testing.T) {
 	if len(timedOut) != 1 || timedOut[0].Id != "old" {
 		t.Fatal("timeout must notify exactly once")
 	}
-	if err := m.Add(AddParam[int]{Index: "expired", Players: map[int]AddPlayer[int]{7: {Uid: 7}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+	if _, err := m.Add(AddParam[int]{Index: "expired", Players: map[int]AddPlayer[int]{7: {Uid: 7}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 		t.Fatal("timeout did not release player/index", err)
 	}
 }
@@ -236,7 +236,7 @@ func TestConcurrentAddSamePlayer(t *testing.T) {
 		go func(i int) {
 			<-start
 			index := strconv.Itoa(i)
-			err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}})
+			_, err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}})
 			results <- added{index: index, err: err}
 		}(i)
 	}
@@ -257,7 +257,7 @@ func TestConcurrentAddSamePlayer(t *testing.T) {
 	if err := m.Cancel(winner); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Add(AddParam[int]{Index: "retry", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+	if _, err := m.Add(AddParam[int]{Index: "retry", Players: map[int]AddPlayer[int]{1: {Uid: 1}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 		t.Fatal("取消后玩家占用没有释放", err)
 	}
 }
@@ -300,7 +300,7 @@ func TestMatchConcurrentAddCancel100msTick(t *testing.T) {
 			for i := 0; i < 40; i++ {
 				uid := worker*40 + i
 				index := strconv.Itoa(uid)
-				if err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+				if _, err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 					t.Error(err)
 					return
 				}
@@ -330,7 +330,7 @@ func TestMatchConcurrentAddCancel100msTick(t *testing.T) {
 		}
 		// 单人取消与成交竞争可能留下奇数玩家，补一人以验证最后一票也能正常完成。
 		if waiting == 1 && !fillerAdded {
-			if err := m.Add(AddParam[int]{Index: "filler", Players: map[int]AddPlayer[int]{320: {Uid: 320}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
+			if _, err := m.Add(AddParam[int]{Index: "filler", Players: map[int]AddPlayer[int]{320: {Uid: 320}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 				t.Fatal(err)
 			}
 			fillerAdded = true

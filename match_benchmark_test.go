@@ -126,7 +126,7 @@ func BenchmarkMatchTick20ms(b *testing.B) {
 					for uid, player := range ticket.Players {
 						players[uid] = AddPlayer[int]{Uid: uid, ExtraInfo: player.ExtraInfo}
 					}
-					if err := m.Add(AddParam[int]{Index: ticket.Index, Players: players,
+					if _, err := m.Add(AddParam[int]{Index: ticket.Index, Players: players,
 						StringData: ticket.StringData, NumberData: ticket.NumberData, Strategies: ticket.Strategies}); err != nil {
 						b.Fatal(err)
 					}
@@ -227,7 +227,7 @@ func BenchmarkAddCancelDuringMatch(b *testing.B) {
 					uid := 100000 + int(next.Add(1))
 					index := "request-" + strconv.Itoa(uid)
 					start := time.Now()
-					err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, StringData: map[string]string{"group": index}, Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{{StringEquals: map[string]string{"group": index}}}}}})
+					_, err := m.Add(AddParam[int]{Index: index, Players: map[int]AddPlayer[int]{uid: {Uid: uid}}, StringData: map[string]string{"group": index}, Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{{StringEquals: map[string]string{"group": index}}}}}})
 					if err != nil {
 						b.Error(err)
 						return
