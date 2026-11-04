@@ -1,12 +1,18 @@
 package nmatcher
 
-import "github.com/tidwall/btree"
+import (
+	"time"
 
-// MatchView 匹配的只读视图
+	"github.com/tidwall/btree"
+)
+
+// MatchView 对外提供只读快照；MakeMatch 可在其独占快照上裁剪已提交的票。
+// 各次 View 调用持有独立的 COW 树，裁剪不改变其他视图和实时索引。
 type MatchView[T PlayerId] struct {
 	tickets     *btree.Map[string, *Ticket[T]]
 	stringIndex map[string]*btree.BTreeG[stringIndexItem]
 	numberIndex map[string]*btree.BTreeG[numberIndexItem]
+	activeIndex *btree.BTreeG[*Ticket[T]]
 }
 
 func (m *MatchIndex[T]) View() *MatchView[T] {
@@ -23,7 +29,26 @@ func (m *MatchIndex[T]) View() *MatchView[T] {
 	for key, tree := range m.numberIndex {
 		v.numberIndex[key] = tree.Copy()
 	}
+	if m.activeIndex != nil {
+		v.activeIndex = m.activeIndex.Copy()
+	}
 	return v
+}
+
+// Active 按到期时间返回本视图需要主动搜索的票，候选搜索仍使用全票池。
+func (v *MatchView[T]) Active(now time.Time, limit int) []string {
+	if limit <= 0 || v.activeIndex == nil {
+		return nil
+	}
+	var ids []string
+	v.activeIndex.Scan(func(item *Ticket[T]) bool {
+		if item.NextAttemptAt.After(now) {
+			return false
+		}
+		ids = append(ids, item.Id)
+		return len(ids) < limit
+	})
+	return ids
 }
 
 func (v *MatchView[T]) Get(ticketId string) (*Ticket[T], bool) {
@@ -35,18 +60,51 @@ func (v *MatchView[T]) Get(ticketId string) (*Ticket[T], bool) {
 	return &cloned, true
 }
 
+// removeMatched 仅用于 MakeMatch 独占的快照，调用时票必须仍在此快照中。
+// 使用快照内的原票删除 active 项，因为实时票的调度时间可能已经更新。
+func (v *MatchView[T]) removeMatched(ticketId string) {
+	ticket, _ := v.tickets.Get(ticketId)
+	for key, value := range ticket.StringData {
+		tree := v.stringIndex[key]
+		tree.Delete(stringIndexItem{Value: value, TicketId: ticketId})
+		if tree.Len() == 0 {
+			delete(v.stringIndex, key)
+		}
+	}
+	for key, value := range ticket.NumberData {
+		tree := v.numberIndex[key]
+		tree.Delete(numberIndexItem{Value: value, TicketId: ticketId})
+		if tree.Len() == 0 {
+			delete(v.numberIndex, key)
+		}
+	}
+	v.activeIndex.Delete(ticket)
+	v.tickets.Delete(ticketId)
+}
+
 // Search 返回粗筛候选 Id，扫描预算在 OR 分支间共享，重复条目也消耗预算。
 // 调用方仍需检查完整必要条件、双向接受，再评分；不保证排序。
 func (v *MatchView[T]) Search(strategy MatchStrategy, maxScanned int) []string {
+	return v.search(strategy, maxScanned, nil)
+}
+
+// search 允许 MakeMatch 复用候选缓冲区；外部 Search 仍返回独立切片。
+func (v *MatchView[T]) search(strategy MatchStrategy, maxScanned int, result []string) []string {
+	result = result[:0]
 	if maxScanned <= 0 {
-		return nil
+		return result
 	}
-	var result []string
-	seen := make(map[string]struct{})
+	// 单个条件组只遍历一个索引，每张票至多出现一次，无需去重 map。
+	var seen map[string]struct{}
+	if len(strategy.Required) > 1 {
+		seen = make(map[string]struct{})
+	}
 	scanned := 0
 	visit := func(id string) bool {
 		scanned++
-		if _, exists := seen[id]; !exists {
+		if seen == nil {
+			result = append(result, id)
+		} else if _, exists := seen[id]; !exists {
 			seen[id] = struct{}{}
 			result = append(result, id)
 		}

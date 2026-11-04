@@ -67,6 +67,11 @@ func (s MatchStrategy) Score[T PlayerId](other *Ticket[T]) float64 {
 	if !s.Accept(other) {
 		return 0
 	}
+	return s.bonusScore(other)
+}
+
+// bonusScore 只计算额外加分，用于已经通过必要条件校验的候选。
+func (s MatchStrategy) bonusScore[T PlayerId](other *Ticket[T]) float64 {
 	var score float64
 	for _, bonus := range s.Bonuses {
 		if len(bonus.AnyOf) == 0 {

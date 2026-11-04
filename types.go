@@ -34,6 +34,11 @@ type Ticket[T PlayerId] struct {
 	CreateTime time.Time `json:"create_time"`
 	ExpireTime time.Time `json:"expire_time"`
 	Attempts   int       `json:"attempts"` // 该票主动发起匹配的次数
+
+	// 调度状态由 MatchIndex 维护，更新时替换记录，不修改旧视图中的票。
+	NextAttemptAt  time.Time `json:"-"`
+	ActiveStage    int       `json:"-"` // 当前 Strategies 的轮数键
+	ActiveAttempts int       `json:"-"` // 当前阶段重试批次内的尝试次数
 }
 
 // 对局的匹配器

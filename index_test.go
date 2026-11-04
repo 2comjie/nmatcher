@@ -140,7 +140,7 @@ func TestMatchIndex(t *testing.T) {
 			seen := make(map[string]bool)
 			var got []string
 
-			for _, id := range index.Search(strategy, 100) {
+			for _, id := range index.View().Search(strategy, 100) {
 				if seen[id] {
 					t.Fatalf("重复返回候选 %q", id)
 				}
@@ -169,7 +169,7 @@ func TestMatchIndex(t *testing.T) {
 
 	// 删除一张票，不应影响同分的另一张。
 	index.Remove(tickets["a"])
-	if got := index.Search(rangeQuery, 100); !slices.Equal(got, []string{"b"}) {
+	if got := index.View().Search(rangeQuery, 100); !slices.Equal(got, []string{"b"}) {
 		t.Fatalf("删除 a 后，同分票 b 的索引异常：%v", got)
 	}
 	if _, exists := index.indexToId["leader-a"]; exists {
@@ -189,11 +189,11 @@ func TestMatchIndex(t *testing.T) {
 	if err := index.Add(tickets["a"]); err != nil {
 		t.Fatal(err)
 	}
-	if got := index.Search(rangeQuery, 100); !slices.Equal(got, []string{"a"}) {
+	if got := index.View().Search(rangeQuery, 100); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("重新加入后查询异常：%v", got)
 	}
 
-	if got := index.Search(MatchStrategy{}, 0); len(got) != 0 {
+	if got := index.View().Search(MatchStrategy{}, 0); len(got) != 0 {
 		t.Fatalf("扫描预算为零，却返回了 %v", got)
 	}
 
@@ -211,7 +211,7 @@ func TestMatchIndex(t *testing.T) {
 			{StringEquals: map[string]string{"region": "europe"}},
 		},
 	}
-	if got := index.Search(repeated, 2); !slices.Equal(got, []string{"a"}) {
+	if got := index.View().Search(repeated, 2); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("重复扫描未正确计入预算：%v", got)
 	}
 }
@@ -269,7 +269,7 @@ func TestMatchIndexIgnoresBonuses(t *testing.T) {
 		AnyOf: []MatchConditions{{StringEquals: map[string]string{"region": "asia"}}},
 		Score: 10,
 	}}}
-	got := index.Search(strategy, 100)
+	got := index.View().Search(strategy, 100)
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("bonus conditions filtered candidates: %v", got)
@@ -307,7 +307,7 @@ func TestMatchIndexRemoveOldTicket(t *testing.T) {
 		{StringEquals: map[string]string{"region": "europe"}},
 		{NumberRanges: map[string]NumberRange{"score": {Min: 200, Max: 200}}},
 	} {
-		got := index.Search(MatchStrategy{Required: []MatchConditions{group}}, 100)
+		got := index.View().Search(MatchStrategy{Required: []MatchConditions{group}}, 100)
 		if !slices.Equal(got, []string{current.Id}) {
 			t.Fatalf("新票属性索引异常：%v", got)
 		}
@@ -487,11 +487,12 @@ func BenchmarkMatchIndex(b *testing.B) {
 
 			for _, query := range queries {
 				b.Run("Search/"+query.name, func(b *testing.B) {
+					view := index.View()
 					b.ReportAllocs()
 					b.ResetTimer()
 
 					for i := 0; i < b.N; i++ {
-						got := index.Search(query.strategy, 100)
+						got := view.Search(query.strategy, 100)
 						if len(got) != 100 {
 							b.Fatalf("得到 %d 个候选，期望 100", len(got))
 						}

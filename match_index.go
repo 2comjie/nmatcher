@@ -26,7 +26,7 @@ type stringIndexItem struct {
 }
 
 // MatchIndex 统一维护不可变的票和关联索引，写事务由 mu 保护。
-// 完整票与属性树参与视图；业务、玩家和终态索引只由短写事务访问。
+// 完整票、active 调度和属性树参与视图；业务与玩家索引只在写事务中访问。
 type MatchIndex[T PlayerId] struct {
 	mu               sync.Mutex
 	tickets          btree.Map[string, *Ticket[T]]
@@ -34,6 +34,7 @@ type MatchIndex[T PlayerId] struct {
 	playerToTicketId map[T]string
 	stringIndex      map[string]*btree.BTreeG[stringIndexItem]
 	numberIndex      map[string]*btree.BTreeG[numberIndexItem]
+	activeIndex      *btree.BTreeG[*Ticket[T]]
 }
 
 func NewMatchIndex[T PlayerId]() *MatchIndex[T] { return &MatchIndex[T]{} }
@@ -86,11 +87,23 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 		}
 		tree.Set(numberIndexItem{Value: value, TicketId: ticket.Id})
 	}
+	ticket.NextAttemptAt = ticket.CreateTime
+	ticket.ActiveStage = -1
+	ticket.ActiveAttempts = 0
 	m.tickets.Set(ticket.Id, ticket)
 	m.indexToId[ticket.Index] = ticket.Id
 	for uid := range ticket.Players {
 		m.playerToTicketId[uid] = ticket.Id
 	}
+	if m.activeIndex == nil {
+		m.activeIndex = btree.NewBTreeGOptions(func(a, b *Ticket[T]) bool {
+			if order := a.NextAttemptAt.Compare(b.NextAttemptAt); order != 0 {
+				return order < 0
+			}
+			return a.Id < b.Id
+		}, btree.Options{NoLocks: true})
+	}
+	m.activeIndex.Set(ticket)
 	return nil
 }
 
@@ -129,6 +142,7 @@ func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
 }
 
 func (m *MatchIndex[T]) removeLocked(ticket *Ticket[T]) {
+	m.activeIndex.Delete(ticket)
 	delete(m.indexToId, ticket.Index)
 	for uid := range ticket.Players {
 		delete(m.playerToTicketId, uid)
