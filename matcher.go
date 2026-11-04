@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"sync"
@@ -384,6 +385,7 @@ type AddParam[T PlayerId] struct {
 
 type AddPlayer[T PlayerId] struct {
 	Uid       T
+	MMR       float64 // 业务提供的玩家实力分
 	ExtraInfo map[string]string
 }
 
@@ -396,10 +398,39 @@ func (m *Matcher[T]) Add(param AddParam[T]) (string, error) {
 	if _, exists := param.Strategies[0]; !exists {
 		return "", errors.New("invalid param")
 	}
-	for _, strategy := range param.Strategies {
+	// 不拆票时必须有一个阵营能容纳整张票；允许拆票时只限制整局总人数。
+	capacity := 0
+	for _, count := range m.options.TeamInfo {
+		if m.options.AllowSplitTicket {
+			capacity += count
+		} else {
+			capacity = max(capacity, count)
+		}
+	}
+	if len(param.Players) > capacity {
+		return "", fmt.Errorf("ticket player count %d exceeds capacity %d", len(param.Players), capacity)
+	}
+	for rounds, strategy := range param.Strategies {
+		if rounds < 0 {
+			return "", fmt.Errorf("strategy round %d must not be negative", rounds)
+		}
+		for _, group := range strategy.Required {
+			for key, bounds := range group.NumberRanges {
+				if !(bounds.Min <= bounds.Max) {
+					return "", fmt.Errorf("strategy %d required range %q must have min <= max", rounds, key)
+				}
+			}
+		}
 		for _, bonus := range strategy.Bonuses {
 			if bonus.Score < 0 || math.IsNaN(bonus.Score) || math.IsInf(bonus.Score, 0) {
 				return "", errors.New("bonus score must be finite and non-negative")
+			}
+			for _, group := range bonus.AnyOf {
+				for key, bounds := range group.NumberRanges {
+					if !(bounds.Min <= bounds.Max) {
+						return "", fmt.Errorf("strategy %d bonus range %q must have min <= max", rounds, key)
+					}
+				}
 			}
 		}
 	}
@@ -418,6 +449,7 @@ func (m *Matcher[T]) Add(param AddParam[T]) (string, error) {
 	for uid, player := range param.Players {
 		ticket.Players[uid] = &Player[T]{
 			Uid:       uid,
+			MMR:       player.MMR,
 			ExtraInfo: player.ExtraInfo,
 			TicketId:  ticket.Id,
 		}

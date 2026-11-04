@@ -17,7 +17,7 @@ func TestMatcherReceiptAndQueries(t *testing.T) {
 		nmatcher.WithOnMatched[int](func(result nmatcher.MatchResult[int]) { matched = result }),
 		nmatcher.WithOnTimeout[int](func(nmatcher.Ticket[int]) {}))
 	param := nmatcher.AddParam[int]{Index: "party", Timeout: time.Minute,
-		Players:    map[int]nmatcher.AddPlayer[int]{1: {ExtraInfo: map[string]string{"name": "alice"}}},
+		Players:    map[int]nmatcher.AddPlayer[int]{1: {MMR: 1800.5, ExtraInfo: map[string]string{"name": "alice"}}},
 		StringData: map[string]string{"region": "asia"}, NumberData: map[string]float64{"score": 100},
 		Strategies: map[int]nmatcher.MatchStrategy{0: {Required: []nmatcher.MatchConditions{{StringEquals: map[string]string{"region": "asia"}}}}},
 	}
@@ -41,6 +41,10 @@ func TestMatcherReceiptAndQueries(t *testing.T) {
 			if ticket.CreateTime.IsZero() || ticket.ExpireTime.Sub(ticket.CreateTime) != param.Timeout {
 				t.Fatal("query lost ticket timestamps")
 			}
+			if ticket.Players[1].MMR != 1800.5 {
+				t.Fatal("query lost player MMR")
+			}
+			ticket.Players[1].MMR = 9999
 			ticket.StringData["region"] = "changed"
 			ticket.NumberData["score"] = 999
 			ticket.Players[1].ExtraInfo["name"] = "changed"
@@ -51,7 +55,7 @@ func TestMatcherReceiptAndQueries(t *testing.T) {
 			} {
 				again, exists := get()
 				if !exists || again.StringData["region"] != "asia" || again.NumberData["score"] != 100 ||
-					again.Players[1].ExtraInfo["name"] != "alice" || again.Strategies[0].Required[0].StringEquals["region"] != "asia" {
+					again.Players[1].MMR != 1800.5 || again.Players[1].ExtraInfo["name"] != "alice" || again.Strategies[0].Required[0].StringEquals["region"] != "asia" {
 					t.Fatal("query result mutated internal ticket data")
 				}
 			}
@@ -80,6 +84,9 @@ func TestMatcherReceiptAndQueries(t *testing.T) {
 	m.RunOnce()
 	if matched.TicketMap[newId] == nil || matched.TicketMap[ticketId] != nil {
 		t.Fatal("match must contain the new admission")
+	}
+	if matched.TicketMap[newId].Players[1].MMR != 1800.5 {
+		t.Fatal("match callback lost player MMR")
 	}
 	if ticket, exists := m.Get(newId); exists || ticket != nil {
 		t.Fatal("matched ticket is still visible")

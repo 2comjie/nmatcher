@@ -124,7 +124,7 @@ func BenchmarkMatchTick20ms(b *testing.B) {
 				for _, ticket := range result.TicketMap {
 					players := make(map[int]AddPlayer[int], len(ticket.Players))
 					for uid, player := range ticket.Players {
-						players[uid] = AddPlayer[int]{Uid: uid, ExtraInfo: player.ExtraInfo}
+						players[uid] = AddPlayer[int]{Uid: uid, MMR: player.MMR, ExtraInfo: player.ExtraInfo}
 					}
 					if _, err := m.Add(AddParam[int]{Index: ticket.Index, Players: players,
 						StringData: ticket.StringData, NumberData: ticket.NumberData, Strategies: ticket.Strategies}); err != nil {

@@ -16,6 +16,7 @@ type PlayerId interface {
 
 type Player[T PlayerId] struct {
 	Uid       T                 `json:"uid"`
+	MMR       float64           `json:"mmr"` // 业务提供的玩家实力分
 	ExtraInfo map[string]string `json:"extra_info"`
 	TicketId  string            `json:"ticket_id"`
 }

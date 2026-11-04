@@ -33,7 +33,7 @@ func TestMatchFullRound(t *testing.T) {
 				players := make(map[int]AddPlayer[int])
 				for j := 0; j < size; j++ {
 					uid++
-					players[uid] = AddPlayer[int]{Uid: uid}
+					players[uid] = AddPlayer[int]{Uid: uid, MMR: float64(uid)*100 + 0.5}
 				}
 				if _, err := m.Add(AddParam[int]{Index: strconv.Itoa(i), Players: players, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
 					t.Fatal(err)
@@ -50,6 +50,9 @@ func TestMatchFullRound(t *testing.T) {
 					t.Fatalf("team %s size mismatch", team)
 				}
 				for _, player := range results[0].TeamMap[team] {
+					if player.MMR != float64(player.Uid)*100+0.5 {
+						t.Fatal("team assignment lost player MMR")
+					}
 					if seen[player.Uid] {
 						t.Fatal("duplicate player")
 					}
@@ -225,7 +228,8 @@ func TestMatchTimeoutCallback(t *testing.T) {
 
 // 并发提交包含同一玩家的票，只允许一张入队。
 func TestConcurrentAddSamePlayer(t *testing.T) {
-	m := &Matcher[int]{ILogger: logx.WithName("concurrent-add")}
+	m := NewMatcher[int](logx.WithName("concurrent-add"), WithTeamInfo[int](map[Team]int{"a": 2}),
+		WithOnMatched[int](func(MatchResult[int]) {}), WithOnTimeout[int](func(Ticket[int]) {}))
 	start := make(chan struct{})
 	type added struct {
 		index string
