@@ -15,9 +15,9 @@ import (
 	"github.com/2comjie/ntool/logx/logdef"
 )
 
-// benchmarkMatcher 的票均为单人票，含两个字符串属性、一个数值属性。
+// benchmarkMatcher 的票均为单人票，含玩家 MMR、两个字符串属性、一个数值属性。
 // selective=true 时每张票只接受相同的唯一 group，用于测稀疏无匹配场景。
-func benchmarkMatcher(b *testing.B, count, players int, selective bool) (*Matcher[int], map[string]*Ticket[int]) {
+func benchmarkMatcher(b *testing.B, count, players int, selective bool, mmr *MMRCondition) (*Matcher[int], map[string]*Ticket[int]) {
 	b.Helper()
 	m := NewMatcher[int](logx.WithLevel(logdef.LevelError),
 		WithTeamInfo[int](map[Team]int{"a": players / 2, "b": players / 2}),
@@ -31,10 +31,10 @@ func benchmarkMatcher(b *testing.B, count, players int, selective bool) (*Matche
 			condition.StringEquals = map[string]string{"group": id}
 		}
 		ticket := &Ticket[int]{Id: id, Index: id, CreateTime: created,
-			Players:    map[int]*Player[int]{i: {Uid: i, TicketId: id}},
+			Players:    map[int]*Player[int]{i: {Uid: i, MMR: 1500 + float64(i%1000), TicketId: id}},
 			StringData: map[string]string{"region": "asia", "group": id},
 			NumberData: map[string]float64{"score": float64(i % 1000)},
-			Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{condition}}},
+			Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{condition}, MMR: mmr}},
 		}
 		if err := m.matchIndex.Add(ticket); err != nil {
 			b.Fatal(err)
@@ -49,7 +49,7 @@ func BenchmarkMakeMatch(b *testing.B) {
 	for _, count := range []int{10000, 100000} {
 		for _, players := range []int{10, 100} {
 			b.Run(fmt.Sprintf("N=%d/players=%d", count, players), func(b *testing.B) {
-				m, originals := benchmarkMatcher(b, count, players, false)
+				m, originals := benchmarkMatcher(b, count, players, false, nil)
 				now := time.Now()
 				seedIds := m.matchIndex.View().Active(now, 1000)
 				matches, matchedPlayers := 0, 0
@@ -87,7 +87,7 @@ func BenchmarkMakeMatch(b *testing.B) {
 		}
 	}
 	b.Run("N=100000/no-match", func(b *testing.B) {
-		m, originals := benchmarkMatcher(b, 100000, 10, true)
+		m, originals := benchmarkMatcher(b, 100000, 10, true, nil)
 		now := time.Now()
 		ids := m.matchIndex.View().Active(now, 1000)
 		b.ReportAllocs()
@@ -113,12 +113,24 @@ func BenchmarkMakeMatch(b *testing.B) {
 // 真实 20ms ticker、10 人局，回调通过公开 Add 补回已匹配玩家，维持十万张票。
 // round 指标包含 RunOnce 的结果复制、回调及补票，吞吐按包含等待的墙钟时间计算。
 func BenchmarkMatchTick20ms(b *testing.B) {
-	for _, steps := range []int{10000, 1000, 2000} {
-		b.Run(fmt.Sprintf("steps=%d", steps), func(b *testing.B) {
-			m, _ := benchmarkMatcher(b, 100000, 10, false)
+	for _, tc := range []struct {
+		name    string
+		steps   int
+		balance bool
+		mmr     *MMRCondition
+	}{
+		{"steps=10000", 10000, false, nil},
+		{"steps=1000", 1000, false, nil},
+		{"steps=2000", 2000, false, nil},
+		{"MMR-steps=1000", 1000, true, nil},
+		{"MMR-range-steps=1000", 1000, true, &MMRCondition{MaxSpread: 100}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			m, _ := benchmarkMatcher(b, 100000, 10, false, tc.mmr)
 			m.options.MatchInterval = 20 * time.Millisecond
 			m.options.ActiveCooldown = 10 * m.options.MatchInterval
-			m.options.MaxSearchStepsPerTick = steps
+			m.options.MaxSearchStepsPerTick = tc.steps
+			m.options.MMRBalance = tc.balance
 			matchedPlayers := 0
 			m.options.OnMatched = func(result MatchResult[int]) {
 				for _, ticket := range result.TicketMap {
@@ -199,7 +211,7 @@ func BenchmarkAddCancelDuringMatch(b *testing.B) {
 		{"Matching20ms", true, false, 20 * time.Millisecond},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			m, _ := benchmarkMatcher(b, 100000, 10, tc.selective)
+			m, _ := benchmarkMatcher(b, 100000, 10, tc.selective, nil)
 			m.options.MatchInterval = tc.interval
 			m.options.ActiveCooldown = 10 * tc.interval
 			var matchedPlayers atomic.Int64

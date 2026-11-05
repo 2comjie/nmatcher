@@ -73,7 +73,11 @@ func TestMatchViewConcurrentWrites(t *testing.T) {
 		}
 	}()
 	close(start)
+	seed, _ := view.Get("0")
 	for i := 0; i < 100; i++ {
+		if got := view.SearchMMR(seed, 0, 100); len(got) != 20 {
+			t.Errorf("旧视图 MMR 候选数改变：%d", len(got))
+		}
 		for _, group := range []MatchConditions{
 			{StringEquals: map[string]string{"region": "asia"}},
 			{NumberRanges: map[string]NumberRange{"score": {Min: 100, Max: 100}}},

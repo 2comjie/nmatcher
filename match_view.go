@@ -12,6 +12,7 @@ type MatchView[T PlayerId] struct {
 	tickets     *btree.Map[string, *Ticket[T]]
 	stringIndex map[string]*btree.BTreeG[stringIndexItem]
 	numberIndex map[string]*btree.BTreeG[numberIndexItem]
+	mmrIndex    *btree.BTreeG[numberIndexItem]
 	activeIndex *btree.BTreeG[*Ticket[T]]
 }
 
@@ -31,6 +32,9 @@ func (m *MatchIndex[T]) View() *MatchView[T] {
 	}
 	if m.activeIndex != nil {
 		v.activeIndex = m.activeIndex.Copy()
+	}
+	if m.mmrIndex != nil {
+		v.mmrIndex = m.mmrIndex.Copy()
 	}
 	return v
 }
@@ -79,11 +83,13 @@ func (v *MatchView[T]) removeMatched(ticketId string) {
 		}
 	}
 	v.activeIndex.Delete(ticket)
+	v.mmrIndex.Delete(numberIndexItem{Value: ticket.MMRAverage, TicketId: ticketId})
 	v.tickets.Delete(ticketId)
 }
 
 // Search 返回粗筛候选 Id，扫描预算在 OR 分支间共享，重复条目也消耗预算。
-// 调用方仍需检查完整必要条件、双向接受，再评分；不保证排序。
+// 此入口只查询属性索引；启用 MMR 时使用 SearchMMR，再检查完整条件和双向接受。
+// 不保证排序。
 func (v *MatchView[T]) Search(strategy MatchStrategy, maxScanned int) []string {
 	return v.search(strategy, maxScanned, nil)
 }

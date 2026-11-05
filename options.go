@@ -7,14 +7,16 @@ import (
 )
 
 type options[T PlayerId] struct {
-	TeamInfo              map[Team]int // 阵营信息
-	AllowSplitTicket      bool         // 是否允许同一张票的玩家分配到不同阵营，默认不允许
-	MatchInterval         time.Duration
-	MaxScanned            int           // 每张 seed 的扫描预算；0 使用 max(100, 阵营总人数*10)
-	MaxSeedsPerTick       int           // 每轮发起票上限，0 使用 1000
-	MaxSearchStepsPerTick int           // 每轮组合搜索预算，0 使用 10000
-	MaxActiveAttempts     int           // 当前阶段连续尝试次数上限，0 使用 3
-	ActiveCooldown        time.Duration // 达到上限后暂停主动搜索的时间，0 使用 10 个匹配周期
+	TeamInfo                  map[Team]int // 阵营信息
+	AllowSplitTicket          bool         // 是否允许同一张票的玩家分配到不同阵营，默认不允许
+	MMRBalance                bool         // 根据玩家 MMR 平衡各阵营的平均实力，默认关闭
+	MaxMMRBalanceStepsPerTick int          // 每轮共享的平衡搜索预算，0 使用 100000
+	MatchInterval             time.Duration
+	MaxScanned                int           // 每张 seed 的扫描预算；0 使用 max(100, 阵营总人数*10)
+	MaxSeedsPerTick           int           // 每轮发起票上限，0 使用 1000
+	MaxSearchStepsPerTick     int           // 每轮组合搜索预算，0 使用 10000
+	MaxActiveAttempts         int           // 当前阶段连续尝试次数上限，0 使用 3
+	ActiveCooldown            time.Duration // 达到上限后暂停主动搜索的时间，0 使用 10 个匹配周期
 
 	OnMatched OnMatched[T]
 	OnTimeout OnTimeout[T]
@@ -54,6 +56,18 @@ func WithTeamInfo[T PlayerId](teamInfo map[Team]int) Option[T] {
 
 func WithAllowSplitTicket[T PlayerId](allow bool) Option[T] {
 	return func(o *options[T]) { o.AllowSplitTicket = allow }
+}
+
+// WithMMRBalance 开启阵营实力平衡，不改变候选检索和必要条件。
+func WithMMRBalance[T PlayerId](enabled bool) Option[T] {
+	return func(o *options[T]) { o.MMRBalance = enabled }
+}
+
+func WithMaxMMRBalanceStepsPerTick[T PlayerId](limit int) Option[T] {
+	if limit < 0 {
+		panic("nmatcher: MaxMMRBalanceStepsPerTick must not be negative")
+	}
+	return func(o *options[T]) { o.MaxMMRBalanceStepsPerTick = limit }
 }
 
 func WithMaxSeedsPerTick[T PlayerId](limit int) Option[T] {

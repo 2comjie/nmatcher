@@ -3,6 +3,7 @@ package nmatcher
 import (
 	"cmp"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ type MatchIndex[T PlayerId] struct {
 	playerToTicketId map[T]string
 	stringIndex      map[string]*btree.BTreeG[stringIndexItem]
 	numberIndex      map[string]*btree.BTreeG[numberIndexItem]
+	mmrIndex         *btree.BTreeG[numberIndexItem] // 按票平均 MMR、TicketId 排序
 	activeIndex      *btree.BTreeG[*Ticket[T]]
 }
 
@@ -42,6 +44,24 @@ func NewMatchIndex[T PlayerId]() *MatchIndex[T] { return &MatchIndex[T]{} }
 func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 	cloned := ticket.Clone()
 	ticket = &cloned
+	// 汇总由索引统一生成，不信任调用方传入的汇总值，也不占用业务 NumberData。
+	ticket.MMRMin, ticket.MMRMax, ticket.MMRAverage = 0, 0, 0
+	first := true
+	for _, player := range ticket.Players {
+		if math.IsNaN(player.MMR) || math.IsInf(player.MMR, 0) {
+			return errors.New("player MMR must be finite")
+		}
+		if first {
+			ticket.MMRMin, ticket.MMRMax = player.MMR, player.MMR
+			first = false
+		} else {
+			ticket.MMRMin = min(ticket.MMRMin, player.MMR)
+			ticket.MMRMax = max(ticket.MMRMax, player.MMR)
+		}
+		ticket.MMRAverage += player.MMR / float64(len(ticket.Players))
+	}
+	// 浮点累加可能略越过端点；均值必须仍位于玩家实际范围内，尤其是零跨度匹配。
+	ticket.MMRAverage = max(ticket.MMRMin, min(ticket.MMRMax, ticket.MMRAverage))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.tickets.Get(ticket.Id); exists {
@@ -87,6 +107,15 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 		}
 		tree.Set(numberIndexItem{Value: value, TicketId: ticket.Id})
 	}
+	if m.mmrIndex == nil {
+		m.mmrIndex = btree.NewBTreeGOptions(func(a, b numberIndexItem) bool {
+			if order := cmp.Compare(a.Value, b.Value); order != 0 {
+				return order < 0
+			}
+			return a.TicketId < b.TicketId
+		}, btree.Options{NoLocks: true})
+	}
+	m.mmrIndex.Set(numberIndexItem{Value: ticket.MMRAverage, TicketId: ticket.Id})
 	ticket.NextAttemptAt = ticket.CreateTime
 	ticket.ActiveStage = -1
 	ticket.ActiveAttempts = 0
@@ -143,6 +172,7 @@ func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
 
 func (m *MatchIndex[T]) removeLocked(ticket *Ticket[T]) {
 	m.activeIndex.Delete(ticket)
+	m.mmrIndex.Delete(numberIndexItem{Value: ticket.MMRAverage, TicketId: ticket.Id})
 	delete(m.indexToId, ticket.Index)
 	for uid := range ticket.Players {
 		delete(m.playerToTicketId, uid)

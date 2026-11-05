@@ -29,6 +29,11 @@ type Ticket[T PlayerId] struct {
 	StringData map[string]string  `json:"string_data"` // 匹配数据
 	NumberData map[string]float64 `json:"number_data"` // 匹配数据
 
+	// 入队时根据 Players 计算，调用方不需要填写，排队期间保持不变。
+	MMRMin     float64 `json:"mmr_min"`
+	MMRMax     float64 `json:"mmr_max"`
+	MMRAverage float64 `json:"mmr_average"`
+
 	// 等待多少轮后，使用什么匹配策略
 	Strategies map[int]MatchStrategy `json:"strategies"`
 

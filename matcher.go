@@ -49,6 +49,9 @@ func NewMatcher[T PlayerId](logger logdef.ILogger, opts ...Option[T]) *Matcher[T
 	if o.MaxSearchStepsPerTick == 0 {
 		o.MaxSearchStepsPerTick = 10000
 	}
+	if o.MaxMMRBalanceStepsPerTick == 0 {
+		o.MaxMMRBalanceStepsPerTick = 100000
+	}
 	if o.MaxActiveAttempts == 0 {
 		o.MaxActiveAttempts = 3
 	}
@@ -120,8 +123,10 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 		Count int
 	}
 	type scoredTicket struct {
-		Ticket *Ticket[T]
-		Score  float64
+		Ticket      *Ticket[T]
+		Score       float64
+		MMRDistance float64
+		MMRLimit    float64
 	}
 
 	teams := make([]teamCapacity, 0, len(m.options.TeamInfo))
@@ -218,6 +223,8 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 	consumed := make(map[string]bool)
 	// 所有 seed 共用回溯预算，防止每张票分别耗尽一次大规模组合搜索。
 	steps := maxSearchSteps
+	// 平衡预算与选票预算独立，整轮共享；耗尽后保留原本合法的分队。
+	balanceSteps := m.options.MaxMMRBalanceStepsPerTick
 	for _, id := range seeds {
 		if steps <= 0 {
 			break
@@ -234,9 +241,21 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 			continue
 		}
 		strategy := seed.StrategyAt(int(now.Sub(seed.CreateTime) / m.options.MatchInterval))
+		groupMin, groupMax := seed.MMRMin, seed.MMRMax
+		groupLimit := math.Inf(1)
+		if strategy.MMR != nil {
+			groupLimit = strategy.MMR.MaxSpread
+			if groupMax-groupMin > groupLimit {
+				continue // 当前阶段连票内玩家跨度都无法接受，等待后续阶段放宽。
+			}
+		}
 		ranked = ranked[:0]
 		// 索引只做必要条件粗筛；先检查完整双向接受，再累加双方对彼此的加分。
-		candidateIds = view.search(strategy, maxScanned, candidateIds)
+		if strategy.MMR != nil {
+			candidateIds = view.searchMMR(seed, groupLimit, maxScanned, candidateIds)
+		} else {
+			candidateIds = view.search(strategy, maxScanned, candidateIds)
+		}
 		for _, candidateId := range candidateIds {
 			if candidateId == seed.Id {
 				continue
@@ -249,10 +268,23 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 			if !strategy.Accept(ticket) || !otherStrategy.Accept(seed) {
 				continue
 			}
-			ranked = append(ranked, scoredTicket{Ticket: ticket, Score: strategy.bonusScore(ticket) + otherStrategy.bonusScore(seed)})
+			otherLimit := math.Inf(1)
+			if otherStrategy.MMR != nil {
+				otherLimit = otherStrategy.MMR.MaxSpread
+			}
+			if max(groupMax, ticket.MMRMax)-min(groupMin, ticket.MMRMin) > min(groupLimit, otherLimit) {
+				continue
+			}
+			ranked = append(ranked, scoredTicket{Ticket: ticket, Score: strategy.bonusScore(ticket) + otherStrategy.bonusScore(seed),
+				MMRDistance: math.Abs(seed.MMRAverage - ticket.MMRAverage), MMRLimit: otherLimit})
 		}
-		// 优先尝试与 seed 互评分高的票；同分时优先排队更久的票，再按 Id 排序。
+		// 启用 MMR 时优先选实力近的票，再比较互评分、排队时间和 Id。
 		slices.SortFunc(ranked, func(a, b scoredTicket) int {
+			if strategy.MMR != nil {
+				if order := cmp.Compare(a.MMRDistance, b.MMRDistance); order != 0 {
+					return order
+				}
+			}
 			if order := cmp.Compare(b.Score, a.Score); order != 0 {
 				return order
 			}
@@ -287,10 +319,22 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 			steps--
 			if needed == 0 {
 				result := buildResult(selected, placements)
+				originalTeams := result.TeamMap
+				balanced := false
+				if m.options.MMRBalance && balanceSteps > 0 {
+					balanced = m.balanceMMR(result, selected, placements, &balanceSteps)
+				}
 				// Pass 在索引锁外接收独立副本，拒绝后继续尝试其他组合。
 				// 同一轮可能检查多个组合，Pass 通过也不代表最终一定提交成功。
 				if m.options.Pass != nil && !m.options.Pass(result.Clone()) {
-					return false
+					if !balanced {
+						return false
+					}
+					// MMR 优化不能覆盖业务分队约束；优化分队被拒绝时检查原分队。
+					result.TeamMap = originalTeams
+					if !m.options.Pass(result.Clone()) {
+						return false
+					}
 				}
 				// 短写事务按原 Ticket.Id 验证所有票仍在队且未过期，再一次性删除。
 				// 与 Cancel 竞争时先提交者生效；同 Index 重入的新票无法替代旧票。
@@ -304,7 +348,10 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 				return false
 			}
 			ticket := ranked[pos].Ticket
-			compatible := len(ticket.Players) <= needed
+			nextMin, nextMax := min(groupMin, ticket.MMRMin), max(groupMax, ticket.MMRMax)
+			nextLimit := min(groupLimit, ranked[pos].MMRLimit)
+			// 整局必须满足每张票的当前上限；仅检查两两跨度会放过中间票的更严限制。
+			compatible := len(ticket.Players) <= needed && nextMax-nextMin <= nextLimit
 			if compatible {
 				// 与 seed 接受彼此还不够，整局所有票必须两两满足双方的必要条件。
 				for _, other := range selected {
@@ -323,10 +370,13 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 					remaining[team] -= len(ticket.Players)
 					selected = append(selected, ticket)
 					placements = append(placements, team)
+					oldMin, oldMax, oldLimit := groupMin, groupMax, groupLimit
+					groupMin, groupMax, groupLimit = nextMin, nextMax, nextLimit
 					if search(pos+1, needed-len(ticket.Players)) {
 						return true
 					}
 					// 此分支失败，撤销选票、阵营分配和容量扣减，再尝试其他阵营。
+					groupMin, groupMax, groupLimit = oldMin, oldMax, oldLimit
 					selected = selected[:len(selected)-1]
 					placements = placements[:len(placements)-1]
 					remaining[team] += len(ticket.Players)
@@ -365,13 +415,19 @@ func (m *Matcher[T]) MakeMatch(now time.Time) ([]*MatchResult[T], []*Ticket[T]) 
 	return results, timeoutTickets
 }
 
-// CanMatch 判断双方当前策略是否互相接受，不检查阵营容量和分队约束
+// CanMatch 判断已入队票的当前策略是否互相接受，包含双方 MMR 跨度限制。
+// 不检查阵营容量和分队约束；完整对局的跨度仍由 MakeMatch 检查。
 func (m *Matcher[T]) CanMatch(a, b *Ticket[T], now time.Time) bool {
 	aRounds := int(now.Sub(a.CreateTime) / m.options.MatchInterval)
 	bRounds := int(now.Sub(b.CreateTime) / m.options.MatchInterval)
 	aStrategy := a.StrategyAt(aRounds)
 	bStrategy := b.StrategyAt(bRounds)
-	return aStrategy.Accept(b) && bStrategy.Accept(a)
+	if !aStrategy.Accept(b) || !bStrategy.Accept(a) {
+		return false
+	}
+	spread := max(a.MMRMax, b.MMRMax) - min(a.MMRMin, b.MMRMin)
+	return (aStrategy.MMR == nil || spread <= aStrategy.MMR.MaxSpread) &&
+		(bStrategy.MMR == nil || spread <= bStrategy.MMR.MaxSpread)
 }
 
 type AddParam[T PlayerId] struct {
@@ -413,6 +469,9 @@ func (m *Matcher[T]) Add(param AddParam[T]) (string, error) {
 	for rounds, strategy := range param.Strategies {
 		if rounds < 0 {
 			return "", fmt.Errorf("strategy round %d must not be negative", rounds)
+		}
+		if strategy.MMR != nil && (strategy.MMR.MaxSpread < 0 || math.IsNaN(strategy.MMR.MaxSpread) || math.IsInf(strategy.MMR.MaxSpread, 0)) {
+			return "", fmt.Errorf("strategy %d MMR max spread must be finite and non-negative", rounds)
 		}
 		for _, group := range strategy.Required {
 			for key, bounds := range group.NumberRanges {

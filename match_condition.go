@@ -22,9 +22,16 @@ type MatchBonus struct {
 	Score float64           `json:"score"`
 }
 
+// MMRCondition 限制整局所有玩家的最高与最低 MMR 差，包含同票内的玩家。
+// MaxSpread 为 0 时要求所有玩家 MMR 相同；策略中 MMR 为 nil 时不限制。
+type MMRCondition struct {
+	MaxSpread float64 `json:"max_spread"`
+}
+
 type MatchStrategy struct {
 	Required []MatchConditions `json:"required"` // 必要条件：组间 OR，组内 AND；为空时不限制
 	Bonuses  []MatchBonus      `json:"bonuses"`  // 额外加分条件，不影响是否接受
+	MMR      *MMRCondition     `json:"mmr,omitempty"`
 }
 
 // Accept 检查一组 AND 条件，配置的属性必须存在，包括不等条件。
@@ -50,6 +57,7 @@ func (c MatchConditions) Accept[T PlayerId](other *Ticket[T]) bool {
 	return true
 }
 
+// Accept 检查对方属性条件；需要双方或整局信息的 MMR 跨度由 CanMatch、MakeMatch 检查。
 func (s MatchStrategy) Accept[T PlayerId](other *Ticket[T]) bool {
 	if len(s.Required) == 0 {
 		return true
@@ -62,7 +70,7 @@ func (s MatchStrategy) Accept[T PlayerId](other *Ticket[T]) bool {
 	return false
 }
 
-// Score 计算单向加分 必要条件失败时返回 0
+// Score 计算单向加分，属性条件失败时返回 0；双方 MMR 限制由 CanMatch、MakeMatch 判定。
 func (s MatchStrategy) Score[T PlayerId](other *Ticket[T]) float64 {
 	if !s.Accept(other) {
 		return 0
@@ -89,6 +97,10 @@ func (s MatchStrategy) bonusScore[T PlayerId](other *Ticket[T]) float64 {
 }
 
 func (s MatchStrategy) Clone() MatchStrategy {
+	if s.MMR != nil {
+		mmr := *s.MMR
+		s.MMR = &mmr
+	}
 	s.Required = slices.Clone(s.Required)
 	for i := range s.Required {
 		group := &s.Required[i]
