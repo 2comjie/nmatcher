@@ -11,7 +11,7 @@ import (
 	"github.com/2comjie/ntool/logx/logdef"
 )
 
-func addMMRSearchTicket(t *testing.T, index *MatchIndex[int], id int, ratings []float64, strategies map[int]MatchStrategy, created time.Time) *Ticket[int] {
+func addMMRSearchTicket(t *testing.T, index *matchIndex[int], id int, ratings []float64, strategies map[int]MatchStrategy, created time.Time) *Ticket[int] {
 	t.Helper()
 	ticketId := fmt.Sprintf("%03d", id)
 	ticket := &Ticket[int]{Id: ticketId, Index: ticketId, CreateTime: created, Strategies: strategies,
@@ -21,53 +21,53 @@ func addMMRSearchTicket(t *testing.T, index *MatchIndex[int], id int, ratings []
 		uid := id*1000 + i
 		ticket.Players[uid] = &Player[int]{Uid: uid, MMR: rating, TicketId: ticketId}
 	}
-	if err := index.Add(ticket); err != nil {
+	if err := index.add(ticket); err != nil {
 		t.Fatal(err)
 	}
-	stored, _ := index.Get(ticketId)
+	stored, _ := index.get(ticketId)
 	return stored
 }
 
 func TestMMRIndexStatsAndSnapshot(t *testing.T) {
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	condition := &MMRCondition{MaxSpread: 500}
 	old := addMMRSearchTicket(t, index, 0, []float64{1000, 1200}, map[int]MatchStrategy{0: {MMR: condition}}, time.Now())
 	if old.MMRMin != 1000 || old.MMRMax != 1200 || old.MMRAverage != 1100 || old.NumberData["mmr"] != -999 {
 		t.Fatal("MMR stats must come from players without changing business NumberData")
 	}
-	view := index.View()
+	view := index.view()
 	condition.MaxSpread = 1
 	old.Strategies[0].MMR.MaxSpread = 2
-	current, _ := index.Get(old.Id)
+	current, _ := index.get(old.Id)
 	if current.Strategies[0].MMR.MaxSpread != 500 {
 		t.Fatal("MMR condition shares memory with input or query result")
 	}
-	if err := index.CancelTicket(old.Id); err != nil {
+	if err := index.cancelTicket(old.Id); err != nil {
 		t.Fatal(err)
 	}
 	newTicket := &Ticket[int]{Id: "new", Index: old.Index, CreateTime: time.Now(), Players: map[int]*Player[int]{0: {Uid: 0, MMR: 1800}},
 		MMRMin: -123, MMRMax: -123, MMRAverage: -123}
-	if err := index.Add(newTicket); err != nil {
+	if err := index.add(newTicket); err != nil {
 		t.Fatal(err)
 	}
-	stored, _ := index.Get("new")
+	stored, _ := index.get("new")
 	if stored.MMRMin != 1800 || stored.MMRMax != 1800 || stored.MMRAverage != 1800 {
 		t.Fatal("caller-provided MMR stats were not replaced")
 	}
-	if got := view.SearchMMR(current, 500, 10); !slices.Equal(got, []string{old.Id}) {
+	if got := view.searchMMR(current, 500, 10); !slices.Equal(got, []string{old.Id}) {
 		t.Fatalf("old MMR view changed: %v", got)
 	}
-	if got := index.View().SearchMMR(current, 500, 10); len(got) != 0 {
+	if got := index.view().searchMMR(current, 500, 10); len(got) != 0 {
 		t.Fatalf("canceled MMR entry remains: %v", got)
 	}
-	index.Remove(newTicket) // 删除必须使用存储的汇总值，不使用调用方的 -123。
+	index.remove(newTicket) // 删除必须使用存储的汇总值，不使用调用方的 -123。
 	if index.mmrIndex.Len() != 0 {
 		t.Fatal("MMR index was not cleaned")
 	}
 }
 
 func TestMMRSearchNearestAndBudget(t *testing.T) {
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	var seed *Ticket[int]
 	for id, rating := range []float64{1000, 500, 1001, 998, 1003, 1000} {
 		ticket := addMMRSearchTicket(t, index, id, []float64{rating}, nil, time.Now())
@@ -75,7 +75,7 @@ func TestMMRSearchNearestAndBudget(t *testing.T) {
 			seed = ticket
 		}
 	}
-	view := index.View()
+	view := index.view()
 	for _, tc := range []struct {
 		limit int
 		want  []string
@@ -85,25 +85,25 @@ func TestMMRSearchNearestAndBudget(t *testing.T) {
 		{3, []string{"000", "005", "002"}},
 		{10, []string{"000", "005", "002", "003", "004"}},
 	} {
-		if got := view.SearchMMR(seed, 10, tc.limit); !slices.Equal(got, tc.want) {
+		if got := view.searchMMR(seed, 10, tc.limit); !slices.Equal(got, tc.want) {
 			t.Fatalf("budget=%d: got=%v want=%v", tc.limit, got, tc.want)
 		}
 	}
-	if got := view.SearchMMR(seed, 0, 10); !slices.Equal(got, []string{"000", "005"}) {
+	if got := view.searchMMR(seed, 0, 10); !slices.Equal(got, []string{"000", "005"}) {
 		t.Fatalf("zero spread must mean equal MMR: %v", got)
 	}
 	highest := addMMRSearchTicket(t, index, 6, []float64{3000}, nil, time.Now())
-	index.Remove(highest)
-	if got := index.View().SearchMMR(highest, 3000, 1); !slices.Equal(got, []string{"004"}) {
+	index.remove(highest)
+	if got := index.view().searchMMR(highest, 3000, 1); !slices.Equal(got, []string{"004"}) {
 		t.Fatalf("query above current index did not search left: %v", got)
 	}
 }
 
 func TestMMRZeroSpreadForWholeParty(t *testing.T) {
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	party := addMMRSearchTicket(t, index, 0, []float64{1, 1, 1, 1, 1, 1, 1}, nil, time.Now())
 	solo := addMMRSearchTicket(t, index, 1, []float64{1}, nil, time.Now())
-	if party.MMRAverage != 1 || solo.MMRAverage != 1 || len(index.View().SearchMMR(party, 0, 10)) != 2 {
+	if party.MMRAverage != 1 || solo.MMRAverage != 1 || len(index.view().searchMMR(party, 0, 10)) != 2 {
 		t.Fatal("rounding must not exclude equal-MMR parties from zero-spread search")
 	}
 }
@@ -118,15 +118,15 @@ func TestMMRMatchPrefersNearCandidates(t *testing.T) {
 	}}, base)
 	near := addMMRSearchTicket(t, &m.matchIndex, 1, []float64{1010}, nil, base.Add(time.Nanosecond))
 	far := addMMRSearchTicket(t, &m.matchIndex, 2, []float64{1200}, nil, base.Add(2*time.Nanosecond))
-	oldView := m.matchIndex.View()
-	results, _ := m.MakeMatch(base)
+	oldView := m.matchIndex.view()
+	results, _ := m.makeMatch(base)
 	if len(results) != 1 || results[0].TicketMap[near.Id] == nil || results[0].TicketMap[far.Id] != nil {
 		t.Fatal("MMR closeness must take priority over bonuses when enabled")
 	}
-	if got := m.matchIndex.View().SearchMMR(seed, 300, 10); !slices.Equal(got, []string{far.Id}) {
+	if got := m.matchIndex.view().searchMMR(seed, 300, 10); !slices.Equal(got, []string{far.Id}) {
 		t.Fatalf("committed MMR entries remain: %v", got)
 	}
-	if got := oldView.SearchMMR(seed, 300, 10); len(got) != 3 {
+	if got := oldView.searchMMR(seed, 300, 10); len(got) != 3 {
 		t.Fatal("matching changed an existing MMR snapshot")
 	}
 }
@@ -141,17 +141,17 @@ func TestMMRWholeGroupAndRelaxation(t *testing.T) {
 	}, base)
 	low := addMMRSearchTicket(t, &m.matchIndex, 1, []float64{1000}, map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: 300}}}, base)
 	high := addMMRSearchTicket(t, &m.matchIndex, 2, []float64{1200}, map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: 300}}}, base)
-	if !m.CanMatch(middle, low, base) || !m.CanMatch(middle, high, base) || !m.CanMatch(low, high, base) {
+	if !m.canMatch(middle, low, base) || !m.canMatch(middle, high, base) || !m.canMatch(low, high, base) {
 		t.Fatal("fixture must be pairwise compatible")
 	}
-	if results, _ := m.MakeMatch(base); len(results) != 0 {
+	if results, _ := m.makeMatch(base); len(results) != 0 {
 		t.Fatal("whole group spread 200 exceeds the middle ticket's limit 150")
 	}
 	after := base.Add(5 * m.options.MatchInterval)
-	if got := m.matchIndex.View().Active(after, 10); !slices.Equal(got, []string{middle.Id}) {
+	if got := m.matchIndex.view().active(after, 10); !slices.Equal(got, []string{middle.Id}) {
 		t.Fatalf("MMR stage change must wake the cooling ticket: %v", got)
 	}
-	if results, _ := m.MakeMatch(after); len(results) != 1 || len(results[0].TicketMap) != 3 {
+	if results, _ := m.makeMatch(after); len(results) != 1 || len(results[0].TicketMap) != 3 {
 		t.Fatal("relaxed ticket did not match the passive candidates")
 	}
 }
@@ -167,7 +167,7 @@ func TestMMRBacktrackingRestoresGroupLimit(t *testing.T) {
 		}
 		addMMRSearchTicket(t, &m.matchIndex, id, []float64{rating}, map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: limit}}}, base.Add(time.Duration(id)))
 	}
-	results, _ := m.MakeMatch(base.Add(time.Second))
+	results, _ := m.makeMatch(base.Add(time.Second))
 	if len(results) != 1 || results[0].TicketMap["001"] != nil || results[0].TicketMap["002"] == nil || results[0].TicketMap["003"] == nil {
 		t.Fatal("failed branch must restore its stricter MMR limit before skipping the ticket")
 	}
@@ -184,7 +184,7 @@ func TestMMRScanBudgetIncludesRejectedAttributes(t *testing.T) {
 		}}, base)
 		addMMRSearchTicket(t, &m.matchIndex, 1, []float64{1001}, nil, base.Add(time.Nanosecond))
 		addMMRSearchTicket(t, &m.matchIndex, 2, []float64{1002}, nil, base.Add(2*time.Nanosecond))
-		results, _ := m.MakeMatch(base)
+		results, _ := m.makeMatch(base)
 		if budget == 2 && len(results) != 0 {
 			t.Fatal("rejected attributes must still consume the MMR scan budget")
 		}
@@ -200,11 +200,11 @@ func TestMMRMutualLimitsAndPartyExtremes(t *testing.T) {
 	base := time.Now()
 	a := addMMRSearchTicket(t, &m.matchIndex, 0, []float64{1000}, map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: 300}}}, base)
 	b := addMMRSearchTicket(t, &m.matchIndex, 1, []float64{1200}, map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: 100}}}, base)
-	if m.CanMatch(a, b, base) || m.CanMatch(b, a, base) {
+	if m.canMatch(a, b, base) || m.canMatch(b, a, base) {
 		t.Fatal("both tickets must accept the spread")
 	}
 	party := addMMRSearchTicket(t, &m.matchIndex, 2, []float64{500, 1500}, nil, base)
-	if party.MMRAverage != a.MMRAverage || m.CanMatch(a, party, base) {
+	if party.MMRAverage != a.MMRAverage || m.canMatch(a, party, base) {
 		t.Fatal("equal averages must not hide party MMR extremes")
 	}
 }
@@ -216,10 +216,10 @@ func TestMMRStageCanDisableLimit(t *testing.T) {
 	strategies := map[int]MatchStrategy{0: {MMR: &MMRCondition{MaxSpread: 0}}, 2: {}}
 	addMMRSearchTicket(t, &m.matchIndex, 0, []float64{1000}, strategies, base)
 	addMMRSearchTicket(t, &m.matchIndex, 1, []float64{1001}, strategies, base)
-	if results, _ := m.MakeMatch(base); len(results) != 0 {
+	if results, _ := m.makeMatch(base); len(results) != 0 {
 		t.Fatal("zero spread must not be treated as disabled")
 	}
-	if results, _ := m.MakeMatch(base.Add(2 * m.options.MatchInterval)); len(results) != 1 {
+	if results, _ := m.makeMatch(base.Add(2 * m.options.MatchInterval)); len(results) != 1 {
 		t.Fatal("nil MMR at the next stage must remove the old limit")
 	}
 }

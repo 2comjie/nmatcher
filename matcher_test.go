@@ -63,7 +63,7 @@ func TestMatchFullRound(t *testing.T) {
 					placement[player.TicketId] = team
 				}
 			}
-			if len(seen) != uid || m.matchIndex.View().tickets.Len() != 0 || m.matchIndex.activeIndex.Len() != 0 {
+			if len(seen) != uid || m.matchIndex.view().tickets.Len() != 0 || m.matchIndex.activeIndex.Len() != 0 {
 				t.Fatal("incomplete match or index cleanup")
 			}
 			m.RunOnce()
@@ -85,7 +85,7 @@ func TestMakeMatchHundredPlayers(t *testing.T) {
 				WithOnMatched[int](func(MatchResult[int]) {}), WithOnTimeout[int](func(Ticket[int]) {}))
 			base := time.Now().Add(-time.Minute)
 			seed := &Ticket[int]{Id: "seed", Index: "seed", CreateTime: base, Players: map[int]*Player[int]{0: {Uid: 0}}, StringData: map[string]string{"kind": "seed"}}
-			if err := m.matchIndex.Add(seed); err != nil {
+			if err := m.matchIndex.add(seed); err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < 199; i++ {
@@ -96,11 +96,11 @@ func TestMakeMatchHundredPlayers(t *testing.T) {
 					condition = MatchConditions{StringNotEquals: map[string]string{"kind": "bad"}}
 				}
 				ticket := &Ticket[int]{Id: id, Index: id, CreateTime: base.Add(time.Nanosecond), Players: map[int]*Player[int]{i + 1: {Uid: i + 1}}, StringData: map[string]string{"kind": kind}, Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{condition}}}}
-				if err := m.matchIndex.Add(ticket); err != nil {
+				if err := m.matchIndex.add(ticket); err != nil {
 					t.Fatal(err)
 				}
 			}
-			results, _ := m.MakeMatch(time.Now())
+			results, _ := m.makeMatch(time.Now())
 			if limit == 100 {
 				if len(results) != 0 {
 					t.Fatal("fixed budget should not reach enough mutually compatible tickets")
@@ -140,17 +140,17 @@ func TestMakeMatchRefillsCandidateWindow(t *testing.T) {
 			created := time.Now().Add(-time.Minute)
 			for i := 0; i < 12; i++ {
 				id := fmt.Sprintf("%02d", i)
-				if err := m.matchIndex.Add(&Ticket[int]{Id: id, Index: id, CreateTime: created,
+				if err := m.matchIndex.add(&Ticket[int]{Id: id, Index: id, CreateTime: created,
 					Players:    map[int]*Player[int]{i: {Uid: i, TicketId: id}},
 					StringData: map[string]string{"region": "asia"}, NumberData: map[string]float64{"score": 100},
 					Strategies: map[int]MatchStrategy{0: tc.strategy}}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			before := m.matchIndex.View()
-			results, expired := m.MakeMatch(time.Now())
-			if len(results) != 6 || len(expired) != 0 || m.matchIndex.View().tickets.Len() != 0 {
-				t.Fatalf("candidate window did not advance: matches=%d expired=%d remaining=%d", len(results), len(expired), m.matchIndex.View().tickets.Len())
+			before := m.matchIndex.view()
+			results, expired := m.makeMatch(time.Now())
+			if len(results) != 6 || len(expired) != 0 || m.matchIndex.view().tickets.Len() != 0 {
+				t.Fatalf("candidate window did not advance: matches=%d expired=%d remaining=%d", len(results), len(expired), m.matchIndex.view().tickets.Len())
 			}
 			seen := make(map[int]bool)
 			for _, result := range results {
@@ -163,7 +163,7 @@ func TestMakeMatchRefillsCandidateWindow(t *testing.T) {
 					}
 				}
 			}
-			if len(seen) != 12 || len(before.Search(tc.strategy, 100)) != 12 || len(before.Active(time.Now(), 100)) != 12 {
+			if len(seen) != 12 || len(before.search(tc.strategy, 100)) != 12 || len(before.active(time.Now(), 100)) != 12 {
 				t.Fatal("players lost or existing snapshot changed")
 			}
 		})
@@ -179,7 +179,7 @@ func TestMakeMatchScoresAndPass(t *testing.T) {
 		if id == "seed" {
 			ticket.Strategies = map[int]MatchStrategy{0: {Bonuses: []MatchBonus{{Score: 50, AnyOf: []MatchConditions{{StringEquals: map[string]string{"kind": "high"}}}}}}}
 		}
-		if err := m.matchIndex.Add(ticket); err != nil {
+		if err := m.matchIndex.add(ticket); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -191,12 +191,12 @@ func TestMakeMatchScoresAndPass(t *testing.T) {
 		}
 		return false
 	}
-	results, _ := m.MakeMatch(time.Now())
-	if len(results) != 0 || passCalls == 0 || m.matchIndex.View().tickets.Len() != 3 {
+	results, _ := m.makeMatch(time.Now())
+	if len(results) != 0 || passCalls == 0 || m.matchIndex.view().tickets.Len() != 3 {
 		t.Fatal("Pass rejection must preserve queued tickets")
 	}
 	m.options.Pass = nil
-	results, _ = m.MakeMatch(time.Now().Add(time.Second))
+	results, _ = m.makeMatch(time.Now().Add(time.Second))
 	if len(results) != 1 || results[0].TicketMap["seed"] == nil || results[0].TicketMap["high"] == nil {
 		t.Fatal("higher bonus did not take priority")
 	}
@@ -210,7 +210,7 @@ func TestMatchTimeoutCallback(t *testing.T) {
 	m := NewMatcher[int](logx.WithName("timeout-test"), WithTeamInfo[int](map[Team]int{"a": 2}),
 		WithOnMatched[int](func(result MatchResult[int]) { t.Error("expired ticket must not match") }),
 		WithOnTimeout[int](func(ticket Ticket[int]) { timedOut = append(timedOut, ticket) }))
-	if err := m.matchIndex.Add(&Ticket[int]{Id: "old", Index: "expired", CreateTime: time.Now().Add(-time.Minute), ExpireTime: time.Now().Add(-time.Second), Players: map[int]*Player[int]{7: {Uid: 7}}}); err != nil {
+	if err := m.matchIndex.add(&Ticket[int]{Id: "old", Index: "expired", CreateTime: time.Now().Add(-time.Minute), ExpireTime: time.Now().Add(-time.Second), Players: map[int]*Player[int]{7: {Uid: 7}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Add(AddParam[int]{Index: "waiting", Players: map[int]AddPlayer[int]{8: {Uid: 8}}, Strategies: map[int]MatchStrategy{0: {}}}); err != nil {
@@ -255,7 +255,7 @@ func TestConcurrentAddSamePlayer(t *testing.T) {
 			t.Fatal(result.err)
 		}
 	}
-	if successes != 1 || m.matchIndex.View().tickets.Len() != 1 {
+	if successes != 1 || m.matchIndex.view().tickets.Len() != 1 {
 		t.Fatal("同一玩家只能有一张票入队成功")
 	}
 	if err := m.Cancel(winner); err != nil {
@@ -328,7 +328,7 @@ func TestMatchConcurrentAddCancel100msTick(t *testing.T) {
 	defer deadline.Stop()
 	fillerAdded := false
 	for {
-		waiting := m.matchIndex.View().tickets.Len()
+		waiting := m.matchIndex.view().tickets.Len()
 		if waiting == 0 {
 			break
 		}

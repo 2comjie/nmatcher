@@ -26,9 +26,9 @@ type stringIndexItem struct {
 	TicketId string
 }
 
-// MatchIndex 统一维护不可变的票和关联索引，写事务由 mu 保护。
+// matchIndex 统一维护不可变的票和关联索引，写事务由 mu 保护。
 // 完整票、active 调度和属性树参与视图；业务与玩家索引只在写事务中访问。
-type MatchIndex[T PlayerId] struct {
+type matchIndex[T PlayerId] struct {
 	mu               sync.Mutex
 	tickets          btree.Map[string, *Ticket[T]]
 	indexToId        map[string]string
@@ -39,9 +39,9 @@ type MatchIndex[T PlayerId] struct {
 	activeIndex      *btree.BTreeG[*Ticket[T]]
 }
 
-func NewMatchIndex[T PlayerId]() *MatchIndex[T] { return &MatchIndex[T]{} }
+func newMatchIndex[T PlayerId]() *matchIndex[T] { return &matchIndex[T]{} }
 
-func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
+func (m *matchIndex[T]) add(ticket *Ticket[T]) error {
 	cloned := ticket.Clone()
 	ticket = &cloned
 	// 汇总由索引统一生成，不信任调用方传入的汇总值，也不占用业务 NumberData。
@@ -116,9 +116,9 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 		}, btree.Options{NoLocks: true})
 	}
 	m.mmrIndex.Set(numberIndexItem{Value: ticket.MMRAverage, TicketId: ticket.Id})
-	ticket.NextAttemptAt = ticket.CreateTime
-	ticket.ActiveStage = -1
-	ticket.ActiveAttempts = 0
+	ticket.nextAttemptAt = ticket.CreateTime
+	ticket.activeStage = -1
+	ticket.activeAttempts = 0
 	m.tickets.Set(ticket.Id, ticket)
 	m.indexToId[ticket.Index] = ticket.Id
 	for uid := range ticket.Players {
@@ -126,7 +126,7 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 	}
 	if m.activeIndex == nil {
 		m.activeIndex = btree.NewBTreeGOptions(func(a, b *Ticket[T]) bool {
-			if order := a.NextAttemptAt.Compare(b.NextAttemptAt); order != 0 {
+			if order := a.nextAttemptAt.Compare(b.nextAttemptAt); order != 0 {
 				return order < 0
 			}
 			return a.Id < b.Id
@@ -136,7 +136,7 @@ func (m *MatchIndex[T]) Add(ticket *Ticket[T]) error {
 	return nil
 }
 
-func (m *MatchIndex[T]) Get(ticketId string) (*Ticket[T], bool) {
+func (m *matchIndex[T]) get(ticketId string) (*Ticket[T], bool) {
 	m.mu.Lock()
 	ticket, exists := m.tickets.Get(ticketId)
 	m.mu.Unlock()
@@ -147,7 +147,7 @@ func (m *MatchIndex[T]) Get(ticketId string) (*Ticket[T], bool) {
 	return &cloned, true
 }
 
-func (m *MatchIndex[T]) GetByIndex(index string) (*Ticket[T], bool) {
+func (m *matchIndex[T]) getByIndex(index string) (*Ticket[T], bool) {
 	m.mu.Lock()
 	ticketId, exists := m.indexToId[index]
 	var ticket *Ticket[T]
@@ -162,7 +162,7 @@ func (m *MatchIndex[T]) GetByIndex(index string) (*Ticket[T], bool) {
 	return &cloned, true
 }
 
-func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
+func (m *matchIndex[T]) remove(ticket *Ticket[T]) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if stored, exists := m.tickets.Get(ticket.Id); exists {
@@ -170,7 +170,7 @@ func (m *MatchIndex[T]) Remove(ticket *Ticket[T]) {
 	}
 }
 
-func (m *MatchIndex[T]) removeLocked(ticket *Ticket[T]) {
+func (m *matchIndex[T]) removeLocked(ticket *Ticket[T]) {
 	m.activeIndex.Delete(ticket)
 	m.mmrIndex.Delete(numberIndexItem{Value: ticket.MMRAverage, TicketId: ticket.Id})
 	delete(m.indexToId, ticket.Index)
@@ -194,7 +194,7 @@ func (m *MatchIndex[T]) removeLocked(ticket *Ticket[T]) {
 	m.tickets.Delete(ticket.Id)
 }
 
-func (m *MatchIndex[T]) Cancel(index string) error {
+func (m *matchIndex[T]) cancel(index string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ticketId, exists := m.indexToId[index]
@@ -206,7 +206,7 @@ func (m *MatchIndex[T]) Cancel(index string) error {
 	return nil
 }
 
-func (m *MatchIndex[T]) CancelTicket(ticketId string) error {
+func (m *matchIndex[T]) cancelTicket(ticketId string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ticket, exists := m.tickets.Get(ticketId)
@@ -217,8 +217,8 @@ func (m *MatchIndex[T]) CancelTicket(ticketId string) error {
 	return nil
 }
 
-// CommitMatch 先复核所有原票，再一起移除；失败不影响其他有效票。
-func (m *MatchIndex[T]) CommitMatch(result *MatchResult[T]) bool {
+// commitMatch 先复核所有原票，再一起移除；失败不影响其他有效票。
+func (m *matchIndex[T]) commitMatch(result *MatchResult[T]) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if result.Id == "" || len(result.TicketMap) == 0 {
@@ -238,7 +238,7 @@ func (m *MatchIndex[T]) CommitMatch(result *MatchResult[T]) bool {
 	return true
 }
 
-func (m *MatchIndex[T]) ExpireTicket(ticketId string) bool {
+func (m *matchIndex[T]) expireTicket(ticketId string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ticket, exists := m.tickets.Get(ticketId)

@@ -46,7 +46,7 @@ func TestCond(t *testing.T) {
 				},
 			}
 
-			if got := strategy.Accept(other); got != tt.want {
+			if got := strategy.accept(other); got != tt.want {
 				t.Errorf("Accept() = %v, want %v", got, tt.want)
 			}
 		})
@@ -56,14 +56,14 @@ func TestCond(t *testing.T) {
 		other := &Ticket[string]{
 			StringData: map[string]string{"region": "asia"},
 		}
-		if strategy.Accept(other) {
+		if strategy.accept(other) {
 			t.Fatal("缺少 score，应该拒绝")
 		}
 	})
 
 	t.Run("空策略不限制", func(t *testing.T) {
 		empty := MatchStrategy{}
-		if !empty.Accept(&Ticket[string]{}) {
+		if !empty.accept(&Ticket[string]{}) {
 			t.Fatal("空策略应该接受")
 		}
 	})
@@ -81,7 +81,7 @@ func TestStringNotEquals(t *testing.T) {
 		{"missing", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := condition.Accept(&Ticket[string]{StringData: tc.data}); got != tc.want {
+			if got := condition.accept(&Ticket[string]{StringData: tc.data}); got != tc.want {
 				t.Fatalf("Accept = %v, want %v", got, tc.want)
 			}
 		})
@@ -119,16 +119,16 @@ func TestMatchStrategyScore(t *testing.T) {
 				StringData: map[string]string{"region": tc.region, "language": tc.language, "mode": tc.mode, "guild": tc.guild},
 				NumberData: map[string]float64{"score": tc.score},
 			}
-			if got := strategy.Accept(other); got != tc.accepted {
+			if got := strategy.accept(other); got != tc.accepted {
 				t.Fatalf("Accept = %v, want %v", got, tc.accepted)
 			}
-			if got := strategy.Score(other); got != tc.want {
+			if got := strategy.score(other); got != tc.want {
 				t.Fatalf("Score = %v, want %v", got, tc.want)
 			}
 		})
 	}
 	strategy.Bonuses = []MatchBonus{{Score: 5}, {AnyOf: []MatchConditions{{}}, Score: 3}}
-	if got := strategy.Score(&Ticket[string]{StringData: map[string]string{"region": "asia"}}); got != 8 {
+	if got := strategy.score(&Ticket[string]{StringData: map[string]string{"region": "asia"}}); got != 8 {
 		t.Fatalf("unconditional bonuses: got %v, want 8", got)
 	}
 }

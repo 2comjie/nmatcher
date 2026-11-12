@@ -34,8 +34,8 @@ type MatchStrategy struct {
 	MMR      *MMRCondition     `json:"mmr,omitempty"`
 }
 
-// Accept 检查一组 AND 条件，配置的属性必须存在，包括不等条件。
-func (c MatchConditions) Accept[T PlayerId](other *Ticket[T]) bool {
+// accept 检查一组 AND 条件，配置的属性必须存在，包括不等条件。
+func (c MatchConditions) accept[T PlayerId](other *Ticket[T]) bool {
 	for key, expected := range c.StringEquals {
 		actual, exists := other.StringData[key]
 		if !exists || actual != expected {
@@ -57,22 +57,22 @@ func (c MatchConditions) Accept[T PlayerId](other *Ticket[T]) bool {
 	return true
 }
 
-// Accept 检查对方属性条件；需要双方或整局信息的 MMR 跨度由 CanMatch、MakeMatch 检查。
-func (s MatchStrategy) Accept[T PlayerId](other *Ticket[T]) bool {
+// accept 检查对方属性条件；需要双方或整局信息的 MMR 跨度由 canMatch、makeMatch 检查。
+func (s MatchStrategy) accept[T PlayerId](other *Ticket[T]) bool {
 	if len(s.Required) == 0 {
 		return true
 	}
 	for _, group := range s.Required {
-		if group.Accept(other) {
+		if group.accept(other) {
 			return true
 		}
 	}
 	return false
 }
 
-// Score 计算单向加分，属性条件失败时返回 0；双方 MMR 限制由 CanMatch、MakeMatch 判定。
-func (s MatchStrategy) Score[T PlayerId](other *Ticket[T]) float64 {
-	if !s.Accept(other) {
+// score 计算单向加分，属性条件失败时返回 0；双方 MMR 限制由 canMatch、makeMatch 判定。
+func (s MatchStrategy) score[T PlayerId](other *Ticket[T]) float64 {
+	if !s.accept(other) {
 		return 0
 	}
 	return s.bonusScore(other)
@@ -87,7 +87,7 @@ func (s MatchStrategy) bonusScore[T PlayerId](other *Ticket[T]) float64 {
 			continue
 		}
 		for _, group := range bonus.AnyOf {
-			if group.Accept(other) {
+			if group.accept(other) {
 				score += bonus.Score
 				break
 			}

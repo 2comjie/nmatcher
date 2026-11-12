@@ -11,15 +11,15 @@ import (
 
 func TestActiveScheduleAndStageWakeup(t *testing.T) {
 	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	for _, id := range []string{"b", "a", "c"} {
 		ticket := &Ticket[int]{Id: id, Index: id, CreateTime: base, Strategies: map[int]MatchStrategy{0: {}, 5: {}}}
-		if err := index.Add(ticket); err != nil {
+		if err := index.add(ticket); err != nil {
 			t.Fatal(err)
 		}
 	}
-	view := index.View()
-	if got := view.Active(base, 2); !slices.Equal(got, []string{"a", "b"}) {
+	view := index.view()
+	if got := view.active(base, 2); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("到期顺序：%v", got)
 	}
 	for second := 0; second < 3; second++ {
@@ -27,37 +27,37 @@ func TestActiveScheduleAndStageWakeup(t *testing.T) {
 			t.Fatalf("第 %d 次尝试失败", second)
 		}
 	}
-	if got := index.View().Active(base.Add(4*time.Second), 10); slices.Contains(got, "a") {
+	if got := index.view().active(base.Add(4*time.Second), 10); slices.Contains(got, "a") {
 		t.Fatal("尚未结束冷却")
 	}
-	if got := index.View().Active(base.Add(5*time.Second), 10); !slices.Contains(got, "a") {
+	if got := index.view().active(base.Add(5*time.Second), 10); !slices.Contains(got, "a") {
 		t.Fatal("阶段变化没有提前唤醒")
 	}
 	if _, ok := index.beginAttempt("a", base.Add(5*time.Second), time.Second, 10*time.Second, 3); !ok {
 		t.Fatal("无法领取新阶段")
 	}
-	scheduled, _ := index.Get("a")
-	if scheduled.ActiveStage != 5 || scheduled.ActiveAttempts != 1 {
+	scheduled, _ := index.get("a")
+	if scheduled.activeStage != 5 || scheduled.activeAttempts != 1 {
 		t.Fatal("新阶段没有重置尝试次数")
 	}
-	if got := index.View().Active(base.Add(6*time.Second), 10); !slices.Contains(got, "a") {
+	if got := index.view().active(base.Add(6*time.Second), 10); !slices.Contains(got, "a") {
 		t.Fatal("新阶段错误地继续冷却")
 	}
-	if got := view.Active(base, 10); !slices.Equal(got, []string{"a", "b", "c"}) {
+	if got := view.active(base, 10); !slices.Equal(got, []string{"a", "b", "c"}) {
 		t.Fatalf("更新调度修改了旧视图：%v", got)
 	}
-	old, _ := view.Get("a")
-	current, _ := index.Get("a")
-	if old.Attempts != 0 || !old.NextAttemptAt.Equal(base) || old.ActiveStage != -1 || current.Attempts != 4 || !current.NextAttemptAt.Equal(base.Add(6*time.Second)) {
+	old, _ := view.get("a")
+	current, _ := index.get("a")
+	if old.Attempts != 0 || !old.nextAttemptAt.Equal(base) || old.activeStage != -1 || current.Attempts != 4 || !current.nextAttemptAt.Equal(base.Add(6*time.Second)) {
 		t.Fatal("尝试计数或视图隔离错误")
 	}
 }
 
 func TestActiveBudgetFairnessAndCooldown(t *testing.T) {
 	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	for _, id := range []string{"a", "b", "c"} {
-		if err := index.Add(&Ticket[int]{Id: id, Index: id, CreateTime: base}); err != nil {
+		if err := index.add(&Ticket[int]{Id: id, Index: id, CreateTime: base}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -67,45 +67,45 @@ func TestActiveBudgetFairnessAndCooldown(t *testing.T) {
 	if _, ok := index.beginAttempt("a", base, time.Second, 10*time.Second, 1); ok {
 		t.Fatal("同一时刻重复领取")
 	}
-	if got := index.View().Active(base, 2); !slices.Equal(got, []string{"b", "c"}) {
+	if got := index.view().active(base, 2); !slices.Equal(got, []string{"b", "c"}) {
 		t.Fatalf("未处理的到期票被跳过：%v", got)
 	}
-	if got := index.View().Active(base.Add(9*time.Second), 10); slices.Contains(got, "a") {
+	if got := index.view().active(base.Add(9*time.Second), 10); slices.Contains(got, "a") {
 		t.Fatal("提前结束冷却")
 	}
-	if got := index.View().Active(base.Add(10*time.Second), 10); !slices.Contains(got, "a") {
+	if got := index.view().active(base.Add(10*time.Second), 10); !slices.Contains(got, "a") {
 		t.Fatal("最终阶段也必须能在冷却后重试")
 	}
 }
 
 func TestActiveRemovedWithTicket(t *testing.T) {
 	base := time.Now()
-	index := NewMatchIndex[int]()
+	index := newMatchIndex[int]()
 	old := &Ticket[int]{Id: "old", Index: "team", CreateTime: base}
-	if err := index.Add(old); err != nil {
+	if err := index.add(old); err != nil {
 		t.Fatal(err)
 	}
-	view := index.View()
-	if err := index.Cancel("team"); err != nil {
+	view := index.view()
+	if err := index.cancel("team"); err != nil {
 		t.Fatal(err)
 	}
 	if index.activeIndex.Len() != 0 {
 		t.Fatal("取消后调度残留")
 	}
-	if err := index.Add(&Ticket[int]{Id: "new", Index: "team", CreateTime: base}); err != nil {
+	if err := index.add(&Ticket[int]{Id: "new", Index: "team", CreateTime: base}); err != nil {
 		t.Fatal(err)
 	}
-	index.Remove(old)
-	if got := index.View().Active(base, 10); !slices.Equal(got, []string{"new"}) {
+	index.remove(old)
+	if got := index.view().active(base, 10); !slices.Equal(got, []string{"new"}) {
 		t.Fatalf("旧移除影响新调度：%v", got)
 	}
-	if got := view.Active(base, 10); !slices.Equal(got, []string{"old"}) {
+	if got := view.active(base, 10); !slices.Equal(got, []string{"old"}) {
 		t.Fatalf("取消影响旧视图：%v", got)
 	}
-	if err := index.Add(&Ticket[int]{Id: "expired", Index: "expired", CreateTime: base.Add(-time.Hour), ExpireTime: base.Add(-time.Second)}); err != nil {
+	if err := index.add(&Ticket[int]{Id: "expired", Index: "expired", CreateTime: base.Add(-time.Hour), ExpireTime: base.Add(-time.Second)}); err != nil {
 		t.Fatal(err)
 	}
-	if !index.ExpireTicket("expired") {
+	if !index.expireTicket("expired") {
 		t.Fatal("没有移除过期票")
 	}
 	if index.activeIndex.Len() != 1 {
@@ -120,14 +120,14 @@ func TestMakeMatchUsesActiveAndPassivePool(t *testing.T) {
 		WithOnMatched[int](func(MatchResult[int]) {}), WithOnTimeout[int](func(Ticket[int]) {}))
 	for i, id := range []string{"passive", "active"} {
 		ticket := &Ticket[int]{Id: id, Index: id, CreateTime: base, Players: map[int]*Player[int]{i: {Uid: i, TicketId: id}}}
-		if err := m.matchIndex.Add(ticket); err != nil {
+		if err := m.matchIndex.add(ticket); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, ok := m.matchIndex.beginAttempt("passive", base, time.Second, 10*time.Second, 1); !ok {
 		t.Fatal("无法进入冷却")
 	}
-	results, expired := m.MakeMatch(base.Add(time.Second))
+	results, expired := m.makeMatch(base.Add(time.Second))
 	if len(results) != 1 || len(expired) != 0 || len(results[0].TicketMap) != 2 {
 		t.Fatal("主动票没有从全池匹配冷却票")
 	}
@@ -144,17 +144,17 @@ func TestMakeMatchDoesNotRepeatInactiveSeed(t *testing.T) {
 	m := NewMatcher[int](logx.WithName("active-test"), WithTeamInfo[int](map[Team]int{"a": 2}),
 		WithMatchInterval[int](time.Second), WithMaxActiveAttempts[int](1), WithActiveCooldown[int](10*time.Second),
 		WithOnMatched[int](func(MatchResult[int]) {}), WithOnTimeout[int](func(Ticket[int]) {}))
-	if err := m.matchIndex.Add(&Ticket[int]{Id: "a", Index: "a", CreateTime: base, Players: map[int]*Player[int]{1: {Uid: 1}}}); err != nil {
+	if err := m.matchIndex.add(&Ticket[int]{Id: "a", Index: "a", CreateTime: base, Players: map[int]*Player[int]{1: {Uid: 1}}}); err != nil {
 		t.Fatal(err)
 	}
-	m.MakeMatch(base)
-	m.MakeMatch(base.Add(time.Second))
-	ticket, _ := m.matchIndex.Get("a")
+	m.makeMatch(base)
+	m.makeMatch(base.Add(time.Second))
+	ticket, _ := m.matchIndex.get("a")
 	if ticket.Attempts != 1 {
 		t.Fatal("冷却中仍主动搜索")
 	}
-	m.MakeMatch(base.Add(10 * time.Second))
-	ticket, _ = m.matchIndex.Get("a")
+	m.makeMatch(base.Add(10 * time.Second))
+	ticket, _ = m.matchIndex.get("a")
 	if ticket.Attempts != 2 {
 		t.Fatal("冷却后没有重新搜索")
 	}
@@ -171,12 +171,12 @@ func TestActiveMatchPassDoesNotBlockWrites(t *testing.T) {
 			return true
 		}))
 	for i, id := range []string{"a", "b"} {
-		if err := m.matchIndex.Add(&Ticket[int]{Id: id, Index: id, Players: map[int]*Player[int]{i: {Uid: i}}}); err != nil {
+		if err := m.matchIndex.add(&Ticket[int]{Id: id, Index: id, Players: map[int]*Player[int]{i: {Uid: i}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	done := make(chan []*MatchResult[int], 1)
-	go func() { result, _ := m.MakeMatch(time.Now()); done <- result }()
+	go func() { result, _ := m.makeMatch(time.Now()); done <- result }()
 	select {
 	case <-entered:
 	case <-time.After(3 * time.Second):
@@ -184,11 +184,11 @@ func TestActiveMatchPassDoesNotBlockWrites(t *testing.T) {
 	}
 	writes := make(chan error, 1)
 	go func() {
-		if err := m.matchIndex.CancelTicket("a"); err != nil {
+		if err := m.matchIndex.cancelTicket("a"); err != nil {
 			writes <- err
 			return
 		}
-		writes <- m.matchIndex.Add(&Ticket[int]{Id: "new", Index: "a", Players: map[int]*Player[int]{0: {Uid: 0}}})
+		writes <- m.matchIndex.add(&Ticket[int]{Id: "new", Index: "a", Players: map[int]*Player[int]{0: {Uid: 0}}})
 	}()
 	select {
 	case err := <-writes:
@@ -209,7 +209,7 @@ func TestActiveMatchPassDoesNotBlockWrites(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("匹配没有退出")
 	}
-	if _, exists := m.matchIndex.Get("new"); !exists {
+	if _, exists := m.matchIndex.get("new"); !exists {
 		t.Fatal("旧结果影响新票")
 	}
 }

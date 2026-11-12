@@ -30,7 +30,7 @@ func TestConcurrentAddSameBusinessIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if successes != 1 || m.matchIndex.View().tickets.Len() != 1 {
+	if successes != 1 || m.matchIndex.view().tickets.Len() != 1 {
 		t.Fatal("same index accepted more than one ticket")
 	}
 	if err := m.Cancel("same"); err != nil {
@@ -43,12 +43,12 @@ func TestConcurrentAddSameBusinessIndex(t *testing.T) {
 
 func TestConcurrentOverlappingMatchCommits(t *testing.T) {
 	for round := 0; round < 32; round++ {
-		index := NewMatchIndex[int]()
+		index := newMatchIndex[int]()
 		tickets := make([]*Ticket[int], 3)
 		for i := range tickets {
 			id := strconv.Itoa(i)
 			tickets[i] = &Ticket[int]{Id: id, Index: id, Players: map[int]*Player[int]{i: {Uid: i}}}
-			if err := index.Add(tickets[i]); err != nil {
+			if err := index.add(tickets[i]); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -56,8 +56,8 @@ func TestConcurrentOverlappingMatchCommits(t *testing.T) {
 		right := &MatchResult[int]{Id: "right", TicketMap: map[string]*Ticket[int]{"1": tickets[1], "2": tickets[2]}}
 		start := make(chan struct{})
 		l, r := make(chan bool, 1), make(chan bool, 1)
-		go func() { <-start; l <- index.CommitMatch(left) }()
-		go func() { <-start; r <- index.CommitMatch(right) }()
+		go func() { <-start; l <- index.commitMatch(left) }()
+		go func() { <-start; r <- index.commitMatch(right) }()
 		close(start)
 		wonLeft, wonRight := <-l, <-r
 		if wonLeft == wonRight {
@@ -67,7 +67,7 @@ func TestConcurrentOverlappingMatchCommits(t *testing.T) {
 		if wonLeft {
 			remaining = "2"
 		}
-		if _, exists := index.Get(remaining); !exists || index.View().tickets.Len() != 1 || index.activeIndex.Len() != 1 || len(index.playerToTicketId) != 1 {
+		if _, exists := index.get(remaining); !exists || index.view().tickets.Len() != 1 || index.activeIndex.Len() != 1 || len(index.playerToTicketId) != 1 {
 			t.Fatal("failed commit partially removed valid tickets")
 		}
 	}
@@ -75,15 +75,15 @@ func TestConcurrentOverlappingMatchCommits(t *testing.T) {
 
 func TestConcurrentCancelAndExpire(t *testing.T) {
 	for round := 0; round < 32; round++ {
-		index := NewMatchIndex[int]()
+		index := newMatchIndex[int]()
 		ticket := &Ticket[int]{Id: "old", Index: "team", Players: map[int]*Player[int]{1: {Uid: 1}}, ExpireTime: time.Now().Add(-time.Second)}
-		if err := index.Add(ticket); err != nil {
+		if err := index.add(ticket); err != nil {
 			t.Fatal(err)
 		}
 		start := make(chan struct{})
 		c, e := make(chan error, 1), make(chan bool, 1)
-		go func() { <-start; c <- index.Cancel("team") }()
-		go func() { <-start; e <- index.ExpireTicket("old") }()
+		go func() { <-start; c <- index.cancel("team") }()
+		go func() { <-start; e <- index.expireTicket("old") }()
 		close(start)
 		err, expired := <-c, <-e
 		if expired {
@@ -93,16 +93,16 @@ func TestConcurrentCancelAndExpire(t *testing.T) {
 		} else if err != nil {
 			t.Fatal("neither cancel nor expiry succeeded", err)
 		}
-		if err := index.Add(&Ticket[int]{Id: "new", Index: "team", Players: ticket.Players}); err != nil {
+		if err := index.add(&Ticket[int]{Id: "new", Index: "team", Players: ticket.Players}); err != nil {
 			t.Fatal(err)
 		}
-		if index.ExpireTicket("old") {
+		if index.expireTicket("old") {
 			t.Fatal("stale expiry succeeded")
 		}
-		if err := index.CancelTicket("old"); !errors.Is(err, ErrTicketNotFound) {
+		if err := index.cancelTicket("old"); !errors.Is(err, ErrTicketNotFound) {
 			t.Fatal(err)
 		}
-		if _, exists := index.Get("new"); !exists {
+		if _, exists := index.get("new"); !exists {
 			t.Fatal("old operations removed new ticket")
 		}
 	}
@@ -133,7 +133,7 @@ func TestMatchedCallbackCanAddAndCancel(t *testing.T) {
 		t.Fatal("business callback blocked on matcher lock")
 	}
 	<-done
-	if m.matchIndex.View().tickets.Len() != 0 {
+	if m.matchIndex.view().tickets.Len() != 0 {
 		t.Fatal("callback cancellation did not finish")
 	}
 }
@@ -149,7 +149,7 @@ func TestConcurrentMakeMatchNoDuplicatePlayers(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan []*MatchResult[int], 4)
 	for i := 0; i < 4; i++ {
-		go func() { <-start; matches, _ := m.MakeMatch(time.Now()); results <- matches }()
+		go func() { <-start; matches, _ := m.makeMatch(time.Now()); results <- matches }()
 	}
 	close(start)
 	seen := make(map[int]bool)
@@ -167,7 +167,7 @@ func TestConcurrentMakeMatchNoDuplicatePlayers(t *testing.T) {
 			}
 		}
 	}
-	if matches != 10 || len(seen) != 20 || m.matchIndex.View().tickets.Len() != 0 {
+	if matches != 10 || len(seen) != 20 || m.matchIndex.view().tickets.Len() != 0 {
 		t.Fatal("concurrent rounds lost players")
 	}
 }

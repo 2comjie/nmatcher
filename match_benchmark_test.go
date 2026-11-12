@@ -36,7 +36,7 @@ func benchmarkMatcher(b *testing.B, count, players int, selective bool, mmr *MMR
 			NumberData: map[string]float64{"score": float64(i % 1000)},
 			Strategies: map[int]MatchStrategy{0: {Required: []MatchConditions{condition}, MMR: mmr}},
 		}
-		if err := m.matchIndex.Add(ticket); err != nil {
+		if err := m.matchIndex.add(ticket); err != nil {
 			b.Fatal(err)
 		}
 		originals[id] = ticket
@@ -44,21 +44,21 @@ func benchmarkMatcher(b *testing.B, count, players int, selective bool, mmr *MMR
 	return m, originals
 }
 
-// 固定相同的池和调度状态；计时只覆盖 MakeMatch，恢复操作不计时。
+// 固定相同的池和调度状态；计时只覆盖 makeMatch，恢复操作不计时。
 func BenchmarkMakeMatch(b *testing.B) {
 	for _, count := range []int{10000, 100000} {
 		for _, players := range []int{10, 100} {
 			b.Run(fmt.Sprintf("N=%d/players=%d", count, players), func(b *testing.B) {
 				m, originals := benchmarkMatcher(b, count, players, false, nil)
 				now := time.Now()
-				seedIds := m.matchIndex.View().Active(now, 1000)
+				seedIds := m.matchIndex.view().active(now, 1000)
 				matches, matchedPlayers := 0, 0
 				b.ReportAllocs()
 				b.ResetTimer()
 				b.StopTimer()
 				for i := 0; i < b.N; i++ {
 					b.StartTimer()
-					results, expired := m.MakeMatch(now)
+					results, expired := m.makeMatch(now)
 					b.StopTimer()
 					if len(expired) != 0 {
 						b.Fatal("unexpected timeout")
@@ -75,8 +75,8 @@ func BenchmarkMakeMatch(b *testing.B) {
 						}
 					}
 					for id := range changed {
-						m.matchIndex.Remove(&Ticket[int]{Id: id})
-						if err := m.matchIndex.Add(originals[id]); err != nil {
+						m.matchIndex.remove(&Ticket[int]{Id: id})
+						if err := m.matchIndex.add(originals[id]); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -89,20 +89,20 @@ func BenchmarkMakeMatch(b *testing.B) {
 	b.Run("N=100000/no-match", func(b *testing.B) {
 		m, originals := benchmarkMatcher(b, 100000, 10, true, nil)
 		now := time.Now()
-		ids := m.matchIndex.View().Active(now, 1000)
+		ids := m.matchIndex.view().active(now, 1000)
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			b.StartTimer()
-			results, _ := m.MakeMatch(now)
+			results, _ := m.makeMatch(now)
 			b.StopTimer()
 			if len(results) != 0 {
 				b.Fatal("unique groups must not match")
 			}
 			for _, id := range ids {
-				m.matchIndex.Remove(&Ticket[int]{Id: id})
-				if err := m.matchIndex.Add(originals[id]); err != nil {
+				m.matchIndex.remove(&Ticket[int]{Id: id})
+				if err := m.matchIndex.add(originals[id]); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -188,7 +188,7 @@ func BenchmarkMatchTick20ms(b *testing.B) {
 			b.ReportMetric(float64(live.HeapAlloc)/1e6, "heap-live-MB")
 			b.ReportMetric(float64(live.HeapInuse)/1e6, "heap-inuse-MB")
 			b.ReportMetric(float64(live.Sys)/1e6, "runtime-sys-MB")
-			if m.matchIndex.View().tickets.Len() != 100000 {
+			if m.matchIndex.view().tickets.Len() != 100000 {
 				b.Fatal("replenishment must preserve the ticket count")
 			}
 		})

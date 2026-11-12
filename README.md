@@ -212,7 +212,9 @@ MMR 的计算、赛后涨跌和持久化由业务负责。
 
 匹配计算在 COW 快照上进行，搜索、组局和 `Pass` 不持有实时索引锁；入队、取消和提交使用短写事务。同一 `Matcher` 的匹配计算串行执行。
 
-`Start` 中的回调同步执行，慢回调会延长实际匹配周期。低层接口 `MakeMatch(now)` 返回已经提交的对局和已移除的超时票，但不执行通知；通常直接使用 `RunOnce` 或 `Start` 即可。
+通过 `Start(ctx)` 持续调度，或由业务调用 `RunOnce()` 执行一轮匹配；两者都会在提交成功后执行通知。回调同步执行，慢回调会延长实际匹配周期。
+
+业务通过 `NewMatcher` 创建匹配器，使用 `Add` 入队、`Get` / `GetByIndex` 查询、`Cancel` / `CancelTicket` 取消。策略配置、回调参数、查询结果和错误保持公开；匹配计算、提交、索引、快照和票的内部调度状态均由包内维护。
 
 ## 配置速查
 
@@ -256,6 +258,6 @@ go test -run '^$' -bench '^BenchmarkMakeMatch/N=100000/players=10$' -benchmem -c
 go test -run '^$' -bench '^BenchmarkMatchTick20ms/MMR-range-steps=1000$' -benchtime=200x -benchmem -cpu=8
 ```
 
-基准输出包含匹配人数、轮次、耗时分位数、分配量和 GC 数据。持续补票基准的轮次耗时包含结果复制、回调和重新入队，不等同于单次 `MakeMatch` 耗时。
+基准输出包含匹配人数、轮次、耗时分位数、分配量和 GC 数据。持续补票基准的轮次耗时包含结果复制、回调和重新入队，不等同于包内单轮匹配计算的耗时。
 
 许可证见 [LICENSE](LICENSE)。

@@ -14,6 +14,21 @@ type PlayerId interface {
 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
 }
 
+type AddParam[T PlayerId] struct {
+	Index      string
+	Players    map[T]AddPlayer[T]
+	StringData map[string]string
+	NumberData map[string]float64
+	Strategies map[int]MatchStrategy
+	Timeout    time.Duration
+}
+
+type AddPlayer[T PlayerId] struct {
+	Uid       T
+	MMR       float64 // 业务提供的玩家实力分
+	ExtraInfo map[string]string
+}
+
 type Player[T PlayerId] struct {
 	Uid       T                 `json:"uid"`
 	MMR       float64           `json:"mmr"` // 业务提供的玩家实力分
@@ -41,10 +56,10 @@ type Ticket[T PlayerId] struct {
 	ExpireTime time.Time `json:"expire_time"`
 	Attempts   int       `json:"attempts"` // 该票主动发起匹配的次数
 
-	// 调度状态由 MatchIndex 维护，更新时替换记录，不修改旧视图中的票。
-	NextAttemptAt  time.Time `json:"-"`
-	ActiveStage    int       `json:"-"` // 当前 Strategies 的轮数键
-	ActiveAttempts int       `json:"-"` // 当前阶段重试批次内的尝试次数
+	// 调度状态由 matchIndex 维护，更新时替换记录，不修改旧视图中的票。
+	nextAttemptAt  time.Time
+	activeStage    int // 当前 Strategies 的轮数键
+	activeAttempts int // 当前阶段重试批次内的尝试次数
 }
 
 // 对局的匹配器
@@ -59,7 +74,7 @@ type MatchResult[T PlayerId] struct {
 	TicketMap map[string]*Ticket[T] `json:"ticket_map"`
 }
 
-func (t *Ticket[T]) StrategyAt(rounds int) MatchStrategy {
+func (t *Ticket[T]) strategyAt(rounds int) MatchStrategy {
 	selectedRound := 0
 	for after := range t.Strategies {
 		if after <= rounds && after > selectedRound {

@@ -6,9 +6,9 @@ import (
 	"github.com/tidwall/btree"
 )
 
-// MatchView 对外提供只读快照；MakeMatch 可在其独占快照上裁剪已提交的票。
-// 各次 View 调用持有独立的 COW 树，裁剪不改变其他视图和实时索引。
-type MatchView[T PlayerId] struct {
+// matchView 为匹配计算提供只读快照；makeMatch 可在其独占快照上裁剪已提交的票。
+// 各次 view 调用持有独立的 COW 树，裁剪不改变其他视图和实时索引。
+type matchView[T PlayerId] struct {
 	tickets     *btree.Map[string, *Ticket[T]]
 	stringIndex map[string]*btree.BTreeG[stringIndexItem]
 	numberIndex map[string]*btree.BTreeG[numberIndexItem]
@@ -16,10 +16,10 @@ type MatchView[T PlayerId] struct {
 	activeIndex *btree.BTreeG[*Ticket[T]]
 }
 
-func (m *MatchIndex[T]) View() *MatchView[T] {
+func (m *matchIndex[T]) view() *matchView[T] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	v := &MatchView[T]{
+	v := &matchView[T]{
 		tickets:     m.tickets.Copy(),
 		stringIndex: make(map[string]*btree.BTreeG[stringIndexItem], len(m.stringIndex)),
 		numberIndex: make(map[string]*btree.BTreeG[numberIndexItem], len(m.numberIndex)),
@@ -39,14 +39,14 @@ func (m *MatchIndex[T]) View() *MatchView[T] {
 	return v
 }
 
-// Active 按到期时间返回本视图需要主动搜索的票，候选搜索仍使用全票池。
-func (v *MatchView[T]) Active(now time.Time, limit int) []string {
+// active 按到期时间返回本视图需要主动搜索的票，候选搜索仍使用全票池。
+func (v *matchView[T]) active(now time.Time, limit int) []string {
 	if limit <= 0 || v.activeIndex == nil {
 		return nil
 	}
 	var ids []string
 	v.activeIndex.Scan(func(item *Ticket[T]) bool {
-		if item.NextAttemptAt.After(now) {
+		if item.nextAttemptAt.After(now) {
 			return false
 		}
 		ids = append(ids, item.Id)
@@ -55,7 +55,7 @@ func (v *MatchView[T]) Active(now time.Time, limit int) []string {
 	return ids
 }
 
-func (v *MatchView[T]) Get(ticketId string) (*Ticket[T], bool) {
+func (v *matchView[T]) get(ticketId string) (*Ticket[T], bool) {
 	ticket, exists := v.tickets.Get(ticketId)
 	if !exists {
 		return nil, false
@@ -64,9 +64,9 @@ func (v *MatchView[T]) Get(ticketId string) (*Ticket[T], bool) {
 	return &cloned, true
 }
 
-// removeMatched 仅用于 MakeMatch 独占的快照，调用时票必须仍在此快照中。
+// removeMatched 仅用于 makeMatch 独占的快照，调用时票必须仍在此快照中。
 // 使用快照内的原票删除 active 项，因为实时票的调度时间可能已经更新。
-func (v *MatchView[T]) removeMatched(ticketId string) {
+func (v *matchView[T]) removeMatched(ticketId string) {
 	ticket, _ := v.tickets.Get(ticketId)
 	for key, value := range ticket.StringData {
 		tree := v.stringIndex[key]
@@ -87,15 +87,15 @@ func (v *MatchView[T]) removeMatched(ticketId string) {
 	v.tickets.Delete(ticketId)
 }
 
-// Search 返回粗筛候选 Id，扫描预算在 OR 分支间共享，重复条目也消耗预算。
-// 此入口只查询属性索引；启用 MMR 时使用 SearchMMR，再检查完整条件和双向接受。
+// search 返回粗筛候选 Id，扫描预算在 OR 分支间共享，重复条目也消耗预算。
+// 此入口只查询属性索引；启用 MMR 时使用 searchMMR，再检查完整条件和双向接受。
 // 不保证排序。
-func (v *MatchView[T]) Search(strategy MatchStrategy, maxScanned int) []string {
-	return v.search(strategy, maxScanned, nil)
+func (v *matchView[T]) search(strategy MatchStrategy, maxScanned int) []string {
+	return v.searchInto(strategy, maxScanned, nil)
 }
 
-// search 允许 MakeMatch 复用候选缓冲区；外部 Search 仍返回独立切片。
-func (v *MatchView[T]) search(strategy MatchStrategy, maxScanned int, result []string) []string {
+// searchInto 允许 makeMatch 复用候选缓冲区。
+func (v *matchView[T]) searchInto(strategy MatchStrategy, maxScanned int, result []string) []string {
 	result = result[:0]
 	if maxScanned <= 0 {
 		return result

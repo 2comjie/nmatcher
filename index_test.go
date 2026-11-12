@@ -9,7 +9,7 @@ import (
 )
 
 func TestMatchIndex(t *testing.T) {
-	index := NewMatchIndex[string]()
+	index := newMatchIndex[string]()
 
 	tickets := map[string]*Ticket[string]{
 		"a": {
@@ -37,7 +37,7 @@ func TestMatchIndex(t *testing.T) {
 	}
 
 	for _, ticket := range tickets {
-		if err := index.Add(ticket); err != nil {
+		if err := index.add(ticket); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -48,7 +48,7 @@ func TestMatchIndex(t *testing.T) {
 		Index:      "leader-a",
 		StringData: map[string]string{"region": "invalid"},
 	}
-	if err := index.Add(duplicate); !errors.Is(err, ErrIndexDuplicated) {
+	if err := index.add(duplicate); !errors.Is(err, ErrIndexDuplicated) {
 		t.Fatalf("重复 Index：得到 %v", err)
 	}
 	if index.indexToId["leader-a"] != "a" {
@@ -140,14 +140,14 @@ func TestMatchIndex(t *testing.T) {
 			seen := make(map[string]bool)
 			var got []string
 
-			for _, id := range index.View().Search(strategy, 100) {
+			for _, id := range index.view().search(strategy, 100) {
 				if seen[id] {
 					t.Fatalf("重复返回候选 %q", id)
 				}
 				seen[id] = true
 
 				// Search 是粗筛，还需要完整条件判定。
-				if strategy.Accept(tickets[id]) {
+				if strategy.accept(tickets[id]) {
 					got = append(got, id)
 				}
 			}
@@ -168,8 +168,8 @@ func TestMatchIndex(t *testing.T) {
 	}
 
 	// 删除一张票，不应影响同分的另一张。
-	index.Remove(tickets["a"])
-	if got := index.View().Search(rangeQuery, 100); !slices.Equal(got, []string{"b"}) {
+	index.remove(tickets["a"])
+	if got := index.view().search(rangeQuery, 100); !slices.Equal(got, []string{"b"}) {
 		t.Fatalf("删除 a 后，同分票 b 的索引异常：%v", got)
 	}
 	if _, exists := index.indexToId["leader-a"]; exists {
@@ -177,7 +177,7 @@ func TestMatchIndex(t *testing.T) {
 	}
 
 	for _, id := range []string{"b", "c", "d"} {
-		index.Remove(tickets[id])
+		index.remove(tickets[id])
 	}
 	if len(index.indexToId) != 0 ||
 		len(index.stringIndex) != 0 ||
@@ -186,18 +186,18 @@ func TestMatchIndex(t *testing.T) {
 	}
 
 	// 删除后可以重新加入。
-	if err := index.Add(tickets["a"]); err != nil {
+	if err := index.add(tickets["a"]); err != nil {
 		t.Fatal(err)
 	}
-	if got := index.View().Search(rangeQuery, 100); !slices.Equal(got, []string{"a"}) {
+	if got := index.view().search(rangeQuery, 100); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("重新加入后查询异常：%v", got)
 	}
 
-	if got := index.View().Search(MatchStrategy{}, 0); len(got) != 0 {
+	if got := index.view().search(MatchStrategy{}, 0); len(got) != 0 {
 		t.Fatalf("扫描预算为零，却返回了 %v", got)
 	}
 
-	if err := index.Add(tickets["c"]); err != nil {
+	if err := index.add(tickets["c"]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,23 +211,23 @@ func TestMatchIndex(t *testing.T) {
 			{StringEquals: map[string]string{"region": "europe"}},
 		},
 	}
-	if got := index.View().Search(repeated, 2); !slices.Equal(got, []string{"a"}) {
+	if got := index.view().search(repeated, 2); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("重复扫描未正确计入预算：%v", got)
 	}
 }
 
 func TestMatchIndexOwnsTickets(t *testing.T) {
-	var index MatchIndex[int]
+	var index matchIndex[int]
 	original := &Ticket[int]{
 		Id: "a", Index: "team",
 		Players:    map[int]*Player[int]{1: {Uid: 1, TicketId: "a", ExtraInfo: map[string]string{"name": "alice"}}},
 		StringData: map[string]string{"region": "asia"},
 		NumberData: map[string]float64{"score": 1500},
 	}
-	if err := index.Add(original); err != nil {
+	if err := index.add(original); err != nil {
 		t.Fatal(err)
 	}
-	if err := index.Add(&Ticket[int]{Id: "a", Index: "other"}); !errors.Is(err, ErrTicketDuplicated) {
+	if err := index.add(&Ticket[int]{Id: "a", Index: "other"}); !errors.Is(err, ErrTicketDuplicated) {
 		t.Fatalf("重复票 Id：得到 %v", err)
 	}
 	original.Index = "changed"
@@ -235,7 +235,7 @@ func TestMatchIndexOwnsTickets(t *testing.T) {
 	original.NumberData["score"] = 999
 	original.Players[1].ExtraInfo["name"] = "changed"
 
-	snapshot, exists := index.GetByIndex("team")
+	snapshot, exists := index.getByIndex("team")
 	if !exists || snapshot.Index != "team" || snapshot.StringData["region"] != "asia" || snapshot.NumberData["score"] != 1500 || snapshot.Players[1].ExtraInfo["name"] != "alice" {
 		t.Fatal("修改入队参数影响了内部票")
 	}
@@ -243,14 +243,14 @@ func TestMatchIndexOwnsTickets(t *testing.T) {
 	snapshot.StringData["region"] = "africa"
 	snapshot.NumberData["score"] = 123
 	delete(snapshot.Players, 1)
-	stored, exists := index.Get("a")
+	stored, exists := index.get("a")
 	if !exists || stored.Index != "team" || stored.StringData["region"] != "asia" || stored.NumberData["score"] != 1500 || len(stored.Players) != 1 {
 		t.Fatal("修改查询副本影响了内部票")
 	}
 
 	// 即使传入副本的属性已改变，删除也使用内部原票清理索引。
-	index.Remove(snapshot)
-	if _, exists := index.Get("a"); exists {
+	index.remove(snapshot)
+	if _, exists := index.get("a"); exists {
 		t.Fatal("删除后仍可查询到票")
 	}
 	if index.tickets.Len() != 0 || len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
@@ -259,9 +259,9 @@ func TestMatchIndexOwnsTickets(t *testing.T) {
 }
 
 func TestMatchIndexIgnoresBonuses(t *testing.T) {
-	index := NewMatchIndex[string]()
+	index := newMatchIndex[string]()
 	for _, id := range []string{"a", "b"} {
-		if err := index.Add(&Ticket[string]{Id: id, Index: id}); err != nil {
+		if err := index.add(&Ticket[string]{Id: id, Index: id}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -269,7 +269,7 @@ func TestMatchIndexIgnoresBonuses(t *testing.T) {
 		AnyOf: []MatchConditions{{StringEquals: map[string]string{"region": "asia"}}},
 		Score: 10,
 	}}}
-	got := index.View().Search(strategy, 100)
+	got := index.view().search(strategy, 100)
 	slices.Sort(got)
 	if !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("bonus conditions filtered candidates: %v", got)
@@ -277,7 +277,7 @@ func TestMatchIndexIgnoresBonuses(t *testing.T) {
 }
 
 func TestMatchIndexRemoveOldTicket(t *testing.T) {
-	var index MatchIndex[int]
+	var index matchIndex[int]
 	old := &Ticket[int]{
 		Id: "old", Index: "team",
 		Players:    map[int]*Player[int]{1: {Uid: 1, TicketId: "old"}},
@@ -290,16 +290,16 @@ func TestMatchIndexRemoveOldTicket(t *testing.T) {
 		StringData: map[string]string{"region": "europe"},
 		NumberData: map[string]float64{"score": 200},
 	}
-	if err := index.Add(old); err != nil {
+	if err := index.add(old); err != nil {
 		t.Fatal(err)
 	}
-	index.Remove(old)
-	if err := index.Add(current); err != nil {
+	index.remove(old)
+	if err := index.add(current); err != nil {
 		t.Fatal(err)
 	}
 
 	// 旧匹配快照不能移除同一业务标识下的新票。
-	index.Remove(old)
+	index.remove(old)
 	if index.indexToId[current.Index] != current.Id || index.playerToTicketId[1] != current.Id {
 		t.Fatal("移除旧票破坏了新票的业务或玩家索引")
 	}
@@ -307,13 +307,13 @@ func TestMatchIndexRemoveOldTicket(t *testing.T) {
 		{StringEquals: map[string]string{"region": "europe"}},
 		{NumberRanges: map[string]NumberRange{"score": {Min: 200, Max: 200}}},
 	} {
-		got := index.View().Search(MatchStrategy{Required: []MatchConditions{group}}, 100)
+		got := index.view().search(MatchStrategy{Required: []MatchConditions{group}}, 100)
 		if !slices.Equal(got, []string{current.Id}) {
 			t.Fatalf("新票属性索引异常：%v", got)
 		}
 	}
-	index.Remove(current)
-	index.Remove(current)
+	index.remove(current)
+	index.remove(current)
 	if len(index.indexToId) != 0 || len(index.playerToTicketId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
 		t.Fatal("移除新票后仍有索引残留")
 	}
@@ -322,10 +322,10 @@ func TestMatchIndexRemoveOldTicket(t *testing.T) {
 func TestMatchIndexPlayerConflict(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		index *MatchIndex[int]
+		index *matchIndex[int]
 	}{
-		{"zero value", &MatchIndex[int]{}},
-		{"constructor", NewMatchIndex[int]()},
+		{"zero value", &matchIndex[int]{}},
+		{"constructor", newMatchIndex[int]()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			index := tc.index
@@ -342,10 +342,10 @@ func TestMatchIndexPlayerConflict(t *testing.T) {
 				StringData: map[string]string{"region": "asia"},
 				NumberData: map[string]float64{"score": 1500},
 			}
-			if err := index.Add(a); err != nil {
+			if err := index.add(a); err != nil {
 				t.Fatal(err)
 			}
-			if err := index.Add(b); !errors.Is(err, ErrPlayerDuplicated) {
+			if err := index.add(b); !errors.Is(err, ErrPlayerDuplicated) {
 				t.Fatalf("玩家重复：得到 %v，期望 ErrPlayerDuplicated", err)
 			}
 			if index.playerToTicketId[1] != "a" {
@@ -358,8 +358,8 @@ func TestMatchIndexPlayerConflict(t *testing.T) {
 				t.Fatal("失败的 Add 留下了索引")
 			}
 
-			index.Remove(a)
-			if err := index.Add(b); err != nil {
+			index.remove(a)
+			if err := index.add(b); err != nil {
 				t.Fatalf("移除原票后玩家应可重新入队：%v", err)
 			}
 			for uid := range b.Players {
@@ -367,7 +367,7 @@ func TestMatchIndexPlayerConflict(t *testing.T) {
 					t.Fatalf("玩家 %d 未关联新票", uid)
 				}
 			}
-			index.Remove(b)
+			index.remove(b)
 			if len(index.playerToTicketId) != 0 || len(index.indexToId) != 0 || len(index.stringIndex) != 0 || len(index.numberIndex) != 0 {
 				t.Fatal("移除后仍有索引残留")
 			}
@@ -380,7 +380,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 
 	for _, size := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprintf("N=%d", size), func(b *testing.B) {
-			index := NewMatchIndex[string]()
+			index := newMatchIndex[string]()
 			tickets := make([]*Ticket[string], size+batch)
 			regions := []string{"asia", "europe", "america", "africa"}
 
@@ -401,7 +401,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 				}
 
 				if i < size {
-					if err := index.Add(tickets[i]); err != nil {
+					if err := index.add(tickets[i]); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -417,7 +417,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					b.StartTimer()
 					for _, ticket := range pending {
-						if err := index.Add(ticket); err != nil {
+						if err := index.add(ticket); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -425,7 +425,7 @@ func BenchmarkMatchIndex(b *testing.B) {
 
 					// 清理不计入 Add 耗时。
 					for _, ticket := range pending {
-						index.Remove(ticket)
+						index.remove(ticket)
 					}
 				}
 
@@ -443,14 +443,14 @@ func BenchmarkMatchIndex(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					// 准备数据不计入 Remove 耗时。
 					for _, ticket := range pending {
-						if err := index.Add(ticket); err != nil {
+						if err := index.add(ticket); err != nil {
 							b.Fatal(err)
 						}
 					}
 
 					b.StartTimer()
 					for _, ticket := range pending {
-						index.Remove(ticket)
+						index.remove(ticket)
 					}
 					b.StopTimer()
 				}
@@ -487,12 +487,12 @@ func BenchmarkMatchIndex(b *testing.B) {
 
 			for _, query := range queries {
 				b.Run("Search/"+query.name, func(b *testing.B) {
-					view := index.View()
+					view := index.view()
 					b.ReportAllocs()
 					b.ResetTimer()
 
 					for i := 0; i < b.N; i++ {
-						got := view.Search(query.strategy, 100)
+						got := view.search(query.strategy, 100)
 						if len(got) != 100 {
 							b.Fatalf("得到 %d 个候选，期望 100", len(got))
 						}
